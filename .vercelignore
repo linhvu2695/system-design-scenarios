@@ -1,0 +1,7 @@
+# Only the site is deployed: index.html, css/, js/, scenarios/.
+tests/
+Makefile
+CLAUDE.md
+README.md
+package.json
+scenarios/_template/

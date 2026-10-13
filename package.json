@@ -1,0 +1,9 @@
+{
+  "name": "system-design-scenarios",
+  "private": true,
+  "description": "No dependencies and no build. This file only tells Node the .js files are ES modules, so the tests can import them.",
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  }
+}
