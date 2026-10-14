@@ -7,4 +7,6 @@ export default [
   'rate-limit-algorithms',
   'sharding-strategies',
   'event-ordering',
+  'caching-strategies',
+  'distributed-transactions',
 ];

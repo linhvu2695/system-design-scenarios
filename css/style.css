@@ -156,6 +156,7 @@ input[type=range]{accent-color:var(--blue);width:180px;max-width:100%}
 .sim-how{margin:0 0 12px;font-size:14px;color:var(--muted);max-width:720px}
 .sim-buttons{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
 .sim-buttons .btn.on{border-color:var(--ok);color:var(--ok)}
+.sim-transport{margin-bottom:0}
 .sim-event{margin:8px 0 0;min-height:1.6em;font-size:14px}
 .sim-event.bad-text{color:var(--bad)}
 .sim-story{margin:0 0 12px;padding-left:18px;font-size:14px;color:var(--muted)}
