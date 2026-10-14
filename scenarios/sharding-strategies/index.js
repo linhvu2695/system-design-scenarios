@@ -4,8 +4,8 @@ export default {
   category: 'database',
   topic: { en: 'Sharding', vi: 'Sharding' },
   title: {
-    en: 'Forty thousand stores, one primary',
-    vi: 'Bốn mươi nghìn cửa hàng, một primary',
+    en: '40.000 stores, one primary',
+    vi: '40.000 cửa hàng, một primary',
   },
 
   scenario: {

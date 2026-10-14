@@ -4,8 +4,8 @@ export default {
   category: 'database',
   topic: { en: 'N+1 queries', vi: 'Truy vấn N+1' },
   title: {
-    en: 'Two hundred and one fast queries',
-    vi: 'Hai trăm lẻ một truy vấn nhanh',
+    en: '201 fast queries',
+    vi: '201 truy vấn nhanh',
   },
 
   scenario: {
