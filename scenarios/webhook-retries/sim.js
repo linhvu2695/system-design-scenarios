@@ -185,8 +185,8 @@ const KIND = { call: 'blue', ok: 'ok', bad: 'bad', note: 'muted', wait: 'warn', 
 export function mount(root, ctx) {
   const H = 360;
   return player(root, ctx, {
-    situations: SITUATIONS.map(x => ({ value: x, label: tx(SITUATION[x]) })),
-    setups: SETUPS.map(x => ({ value: x, label: tx(LABEL[x]) })),
+    situations: SITUATIONS.map(x => ({ value: x, label: tx(SITUATION[x]), icon: { normal: 'sun', slow: 'hourglass', crash: 'power', dup: 'copy' }[x] })),
+    setups: SETUPS.map(x => ({ value: x, label: tx(LABEL[x]), icon: { today: 'server', fast: 'bolt', inbox: 'inbox', background: 'memory', dedup: 'tag' }[x] })),
     initial: { situation: 'slow' },
     run, survives, height: H,
     duration: h => h.kind === 'gap' ? 1.6 : h.from === h.to ? 1.3 : 1,
