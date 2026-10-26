@@ -11,4 +11,5 @@ export default [
   'distributed-transactions',
   'webhook-retries',
   'partial-indexes',
+  'connection-pooling',
 ];
