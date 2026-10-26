@@ -1,13 +1,14 @@
 /* One flight + hotel booking, played out message by message between the booking
    service, the airline, the hotel, the payment provider and the customer. Each
    partner's box shows what it holds (seat, room, money) and changes colour as calls
-   land; the service shows its checklist of steps. Pick a situation and a setup; a
-   scoreboard fills in as you watch. Before the visitor answers, only today's code is
-   unlocked. */
+   land; the service shows its checklist of steps. js/sim-player.js supplies the
+   controls, clock, captions and scoreboard; this file is the model and the drawing.
+   Before the visitor answers, only today's code is unlocked. */
 
-import { el } from '../../js/dom.js';
 import { tx } from '../../js/i18n.js';
-import { canvas, choice, button, css, row, onResize, reducedMotion } from '../../js/sim-kit.js';
+import { css } from '../../js/sim-kit.js';
+import { node, badge, road, message, later, icon } from '../../js/sim-draw.js';
+import { player } from '../../js/sim-player.js';
 
 export const SETUPS = ['today', 'twopc', 'saga', 'recon'];
 export const SITUATIONS = ['normal', 'noroom', 'declined', 'crash', 'timeout'];
@@ -32,7 +33,8 @@ export const ORDER = {
 };
 const CRASH_AFTER = 3;   // the 'crash' situation: the service restarts after three steps
 
-/* Play one booking. Returns { hops, final, ok }.
+/* Play one booking. Returns { steps, final, ok, summary }, the shape js/sim-player.js
+   plays; each step is one message (a hop).
    hop: { from, to, label, kind, say: {en, vi}, state } with state a snapshot after it.
    Pure, so the scoreboard is pinned by tests/distributed-transactions.test.js. */
 export function run(setup, situation) {
@@ -171,7 +173,13 @@ export function run(setup, situation) {
   const f = hops.at(-1).state;
   const allDone = f.customer === 'confirmed' && f.seat === 'ticketed' && f.tickets === 1 && f.room === 'confirmed' && f.card === 'captured';
   const allUndone = f.customer === 'failed' && ['none', 'released'].includes(f.seat) && ['none', 'released', 'unavailable'].includes(f.room) && ['none', 'cancelled', 'declined'].includes(f.card) && !f.night;
-  return { hops, final: f, ok: setup !== 'twopc' ? allDone || allUndone : false };
+  const ok = setup !== 'twopc' ? allDone || allUndone : false;
+  const summary = setup === 'twopc'
+    ? { en: 'No booking possible: the partners cannot take part in two-phase commit, so even a good day ends in abort.', vi: 'Không đặt được: các đối tác không tham gia được two-phase commit, nên kể cả ngày bình thường cũng kết thúc bằng huỷ.' }
+    : ok
+    ? { en: 'Clean end: everything done, or everything undone and the customer never charged.', vi: 'Kết thúc sạch: hoặc mọi thứ xong, hoặc mọi thứ được hoàn tác và khách chưa bao giờ bị trừ tiền.' }
+    : { en: 'Broken end: what the customer was told does not match what the partners hold.', vi: 'Kết thúc hỏng: điều khách được báo không khớp với những gì các đối tác đang giữ.' };
+  return { steps: hops, final: f, ok, summary };
 }
 
 /* Small helpers for captions. */
@@ -197,216 +205,138 @@ const SITUATION = {
   timeout: { en: 'Airline times out', vi: 'Hãng bay timeout' },
 };
 const KIND = { call: 'blue', ok: 'ok', bad: 'bad', undo: 'violet', note: 'muted', night: 'warn' };
-const STEP_MARK = { todo: '○', running: '●', done: '✓', failed: '✗', undone: '↩', unknown: '?' };
-const STEP_COLOR = { todo: 'faint', running: 'blue', done: 'ok', failed: 'bad', undone: 'violet', unknown: 'warn' };
 
-export function mount(root, { revealed, state }) {
-  const s = Object.assign(state, { setup: 'today', situation: 'noroom', played: {}, ...state });
-  if (!revealed) s.setup = 'today';
+export function mount(root, ctx) {
+  const H = 340;
+  return player(root, ctx, {
+    situations: SITUATIONS.map(x => ({ value: x, label: tx(SITUATION[x]), icon: { normal: 'sun', noroom: 'bed', declined: 'card', crash: 'power', timeout: 'hourglass' }[x] })),
+    setups: SETUPS.map(x => ({ value: x, label: tx(LABEL[x]), icon: { today: 'db', twopc: 'checks', saga: 'flow', recon: 'moon' }[x] })),
+    initial: { situation: 'noroom' },
+    run, survives, height: H,
+    duration: h => h.kind === 'night' ? 2.2 : h.from === h.to ? 1.3 : 1,
+    tone: h => h.kind === 'bad' ? 'bad' : h.kind === 'night' ? 'warn' : null,
+    draw: frame => draw(frame, ctx.state.setup ?? 'today', H),
+  });
+}
 
-  const chart = canvas(320);
-  const caption = el('p', { class: 'sim-event', 'aria-live': 'polite' });
-  const board = el('div', { class: 'sim-board' });
-  const reduce = reducedMotion();
-  // Seconds per message at normal speed; after landing, a message lingers so its
-  // caption can be read before the next one starts.
-  const DUR = { self: 1.3, night: 2.2, move: 1.0 }, DWELL = 1.2;
-  const SPEEDS = { slow: 0.5, normal: 1, fast: 2 };
-  if (!SPEEDS[s.speed]) s.speed = 'slow';
-  const dur = h => (reduce ? 0.05 : h.kind === 'night' ? DUR.night : h.from === h.to ? DUR.self : DUR.move);
-  // k: the message in flight; p: how far it has travelled (0..1); dwell: seconds left
-  // to linger on the one that just landed.
-  let result, k = 0, p = 0, dwell = 0, paused = false, last = 0, raf = 0;
+/* Where a message leaves or enters a box: the edge point facing the other box. */
+function edge([cx, cy], [hw, hh], [tx2, ty2]) {
+  const dx = tx2 - cx, dy = ty2 - cy;
+  const t = Math.min(dx ? hw / Math.abs(dx) : Infinity, dy ? hh / Math.abs(dy) : Infinity);
+  return [cx + dx * t, cy + dy * t];
+}
 
-  function play() {
-    result = run(s.setup, s.situation);
-    k = 0; p = 0; dwell = 0;
-    setPaused(false);
-    cancelAnimationFrame(raf);
-    last = performance.now() / 1000;
-    raf = requestAnimationFrame(frame);
+/* Each party's colour and icon. */
+const LOOK = {
+  customer: { color: 'violet', icon: 'user' },
+  svc: { color: 'blue', icon: 'server' },
+  airline: { color: 'pink', icon: 'plane' },
+  hotel: { color: 'cat-queue', icon: 'bed' },
+  pay: { color: 'cat-caching', icon: 'card' },
+};
+const markOf = h => h.label === 'CRASH' ? 'stop' : /timeout|02:00|expired/.test(h.label) ? 'clock'
+  : ({ call: 'arrow', ok: 'check', bad: 'cross', undo: 'undo', note: 'dots', night: 'clock' })[h.kind];
+const initial = setup => ({ seat: 'none', tickets: 0, room: 'none', card: 'none', customer: 'waiting', steps: ORDER[setup].map(() => 'todo'), saved: 0 });
+
+/* The five parties as they stand before step k, and step k's message in flight. */
+function draw({ g, w, h, result, k, p, moving }, setup, H) {
+  const n = result.steps.length;
+  const cur = result.steps[Math.min(k, n - 1)];
+  const st = k === 0 ? initial(setup) : result.steps[k - 1].state;
+  const P = { customer: [w * 0.1, H / 2], svc: [w * 0.4, H / 2], airline: [w * 0.82, 62], hotel: [w * 0.82, H / 2], pay: [w * 0.82, H - 62] };
+  const size = id => id === 'customer' ? [Math.min(140, w * 0.17), 130] : id === 'svc' ? [Math.min(210, w * 0.27), H - 70] : [Math.min(210, w * 0.28), 96];
+  const focus = moving ? cur : k > 0 && k < n ? result.steps[k - 1] : null;
+  const isActive = id => focus && focus.kind !== 'night' && (focus.from === id || focus.to === id);
+  g.clearRect(0, 0, w, h);
+
+  for (const [a, b] of [['customer', 'svc'], ['svc', 'airline'], ['svc', 'hotel'], ['svc', 'pay']]) {
+    const lit = moving && cur.from !== cur.to && ((cur.from === a && cur.to === b) || (cur.from === b && cur.to === a));
+    road(g, P[a], P[b], lit ? KIND[cur.kind] : null);
+  }
+  const box = (id, title, alert) => {
+    const [x, y] = P[id], [bw, bh] = size(id);
+    node(g, { x, y, w: bw, h: bh, title, ...LOOK[id], active: isActive(id), alert });
+  };
+  const text = (x, y, s, color, font = '11px "IBM Plex Mono", monospace', align = 'center', max) => {
+    g.font = font; g.textAlign = align; g.textBaseline = 'middle'; g.fillStyle = css(color); g.fillText(s, x, y, max);
+  };
+
+  // Partners: what each one holds.
+  const PILL = {
+    none: ['—', 'faint', 'dots'],
+    held: [{ en: 'held', vi: 'đang giữ' }, 'warn', 'clock'],
+    ticketed: st.tickets > 1 ? [{ en: `${st.tickets} tickets!`, vi: `${st.tickets} vé!` }, 'bad', 'cross'] : [{ en: 'ticket issued', vi: 'đã xuất vé' }, 'ok', 'check'],
+    confirmed: [{ en: 'room confirmed', vi: 'đã xác nhận phòng' }, 'ok', 'check'],
+    released: [{ en: 'released', vi: 'đã huỷ giữ' }, 'muted', 'undo'],
+    unavailable: [{ en: 'no room', vi: 'hết phòng' }, 'bad', 'cross'],
+    authorized: [{ en: '$1,240 on hold', vi: 'giữ 1.240 đô' }, 'warn', 'clock'],
+    captured: [{ en: '$1,240 charged', vi: 'đã thu 1.240 đô' }, 'ok', 'check'],
+    cancelled: [{ en: 'hold cancelled', vi: 'đã huỷ cấp phép' }, 'muted', 'undo'],
+    refunded: [{ en: 'refunded', vi: 'đã hoàn tiền' }, 'muted', 'undo'],
+    declined: [{ en: 'declined', vi: 'bị từ chối' }, 'bad', 'cross'],
+  };
+  for (const [id, title, value] of [
+    ['airline', tx({ en: 'Airline', vi: 'Hãng bay' }), st.seat === 'held' ? 'held' : st.seat],
+    ['hotel', tx({ en: 'Hotel', vi: 'Khách sạn' }), st.room],
+    ['pay', tx({ en: 'Payments', vi: 'Thanh toán' }), st.card],
+  ]) {
+    const [label, color, mark] = PILL[value];
+    box(id, title, color === 'bad');
+    const [x, y] = P[id], [bw] = size(id);
+    const extra = id === 'airline' && value === 'held' ? tx({ en: 'seat ', vi: 'ghế ' }) : id === 'hotel' && value === 'held' ? tx({ en: 'room ', vi: 'phòng ' }) : '';
+    badge(g, x, y + 12, extra + tx(label), color, bw - 16, mark);
   }
 
-  /* Move the current message on by dt seconds of animation time. */
-  function advance(dt) {
-    if (k >= result.hops.length) return;
-    if (dwell > 0) { dwell -= dt; return; }
-    p += dt / dur(result.hops[k]);
-    if (p >= 1) { k++; p = 0; dwell = reduce ? 0 : DWELL; }
-  }
-
-  function frame() {
-    const now = performance.now() / 1000;
-    if (!paused) advance((now - last) * SPEEDS[s.speed]);
-    last = now;
-    draw();
-    if (k < result.hops.length) raf = requestAnimationFrame(frame);
-    else { s.played[`${s.setup}:${s.situation}`] = true; paintBoard(); setPaused(false); }
-  }
-
-  /* Paused: deliver the current message (or skip the linger) and stop again. */
-  function step() {
-    if (!result || k >= result.hops.length) return;
-    setPaused(true);
-    if (dwell > 0) dwell = 0;
-    else { k++; p = 0; dwell = 0; }
-    draw();
-    if (k >= result.hops.length) { s.played[`${s.setup}:${s.situation}`] = true; paintBoard(); }
-    else { cancelAnimationFrame(raf); last = performance.now() / 1000; raf = requestAnimationFrame(frame); }
-  }
-
-  function draw() {
-    const { w, h } = chart.fit();
-    const g = chart.g;
-    const cur = result.hops[Math.min(k, result.hops.length - 1)];
-    const st = k === 0 ? { ...result.hops[0].state, ...initial() } : result.hops[k - 1].state;
-    const X = { customer: w * 0.1, svc: w * 0.36, partners: w * 0.78 };
-    const Y = { airline: 62, hotel: 160, pay: 258 };
-    const pw = Math.min(190, w * 0.3), ph = 74;
-    g.clearRect(0, 0, w, h);
-    g.textBaseline = 'middle';
-
-    const panel = (x, y, wd, ht, title, color = 'line') => {
-      g.fillStyle = css('surface2'); g.strokeStyle = css(color); g.lineWidth = color === 'line' ? 1 : 2;
-      g.beginPath(); g.roundRect(x - wd / 2, y - ht / 2, wd, ht, 10); g.fill(); g.stroke(); g.lineWidth = 1;
-      g.fillStyle = css('muted'); g.font = '600 10px "IBM Plex Mono", monospace'; g.textAlign = 'left';
-      g.fillText(title.toUpperCase(), x - wd / 2 + 10, y - ht / 2 + 13);
-    };
-    const pill = (x, y, text, color) => {
-      g.font = '600 12px "Hanken Grotesk", sans-serif'; g.textAlign = 'center';
-      const tw = Math.min(pw - 20, g.measureText(text).width + 18);
-      g.fillStyle = css(color); g.globalAlpha = 0.18; g.beginPath(); g.roundRect(x - tw / 2, y - 12, tw, 24, 12); g.fill(); g.globalAlpha = 1;
-      g.fillStyle = css(color); g.fillText(text, x, y + 1, tw - 8);
-    };
-
-    // Roads.
-    g.strokeStyle = css('line'); g.setLineDash([3, 5]);
-    for (const p of ['airline', 'hotel', 'pay']) { g.beginPath(); g.moveTo(X.svc + 70, 160); g.lineTo(X.partners - pw / 2, Y[p]); g.stroke(); }
-    g.beginPath(); g.moveTo(X.customer + 50, 160); g.lineTo(X.svc - 70, 160); g.stroke(); g.setLineDash([]);
-
-    // Partners.
-    const seat = { none: ['—', 'faint'], held: [tx({ en: 'seat held', vi: 'đang giữ ghế' }), 'warn'], ticketed: [st.tickets > 1 ? tx({ en: `${st.tickets} tickets!`, vi: `${st.tickets} vé!` }) : tx({ en: 'ticket issued', vi: 'đã xuất vé' }), st.tickets > 1 ? 'bad' : 'ok'], released: [tx({ en: 'released', vi: 'đã huỷ giữ' }), 'muted'] }[st.seat];
-    const room = { none: ['—', 'faint'], held: [tx({ en: 'room held', vi: 'đang giữ phòng' }), 'warn'], confirmed: [tx({ en: 'room confirmed', vi: 'đã xác nhận phòng' }), 'ok'], released: [tx({ en: 'released', vi: 'đã huỷ giữ' }), 'muted'], unavailable: [tx({ en: 'no room', vi: 'hết phòng' }), 'bad'] }[st.room];
-    const card = { none: ['—', 'faint'], authorized: [tx({ en: '$1,240 on hold', vi: 'giữ 1.240 đô' }), 'warn'], captured: [tx({ en: '$1,240 charged', vi: 'đã thu 1.240 đô' }), 'ok'], cancelled: [tx({ en: 'hold cancelled', vi: 'đã huỷ cấp phép' }), 'muted'], refunded: [tx({ en: 'refunded', vi: 'đã hoàn tiền' }), 'muted'], declined: [tx({ en: 'declined', vi: 'bị từ chối' }), 'bad'] }[st.card];
-    for (const [p, title, [text, color]] of [['airline', tx({ en: 'Airline', vi: 'Hãng bay' }), seat], ['hotel', tx({ en: 'Hotel', vi: 'Khách sạn' }), room], ['pay', tx({ en: 'Payments', vi: 'Thanh toán' }), card]]) {
-      panel(X.partners, Y[p], pw, ph, title, color === 'bad' ? 'bad' : 'line');
-      pill(X.partners, Y[p] + 8, text, color);
-    }
-
-    // The booking service and its checklist.
-    const sw = 140, sh = 250;
-    const crashed = cur && cur.label === 'CRASH' && k < result.hops.length;
-    panel(X.svc, 160, sw, sh, tx({ en: 'Booking service', vi: 'Dịch vụ đặt chỗ' }), crashed ? 'bad' : 'line');
-    ORDER[s.setup].forEach((id, i) => {
-      const y = 160 - sh / 2 + 38 + i * 26, mark = st.steps[i];
-      g.textAlign = 'left'; g.fillStyle = css(STEP_COLOR[mark]); g.font = '700 12px "IBM Plex Mono", monospace';
-      g.fillText(STEP_MARK[mark], X.svc - sw / 2 + 10, y);
-      g.font = '12px "Hanken Grotesk", sans-serif';
-      g.fillStyle = css(STEP[id].pivot && s.setup === 'saga' ? 'warn' : mark === 'todo' ? 'muted' : 'text');
-      g.fillText(tx(STEP[id].name), X.svc - sw / 2 + 26, y, sw - 34);
+  // The booking service and its checklist; the ticket is the point of no return.
+  const crashing = moving && cur.label === 'CRASH';
+  box('svc', tx({ en: 'Booking service', vi: 'Dịch vụ đặt chỗ' }), crashing);
+  {
+    const [x, y] = P.svc, [bw, bh] = size('svc'), left = x - bw / 2 + 16, top = y - bh / 2 + 50;
+    const MARK = { todo: ['dots', 'faint'], running: ['arrow', 'blue'], done: ['check', 'ok'], failed: ['cross', 'bad'], undone: ['undo', 'violet'], unknown: ['clock', 'warn'] };
+    ORDER[setup].forEach((id, i) => {
+      const yy = top + i * 25, [mk, color] = MARK[st.steps[i]], pivot = STEP[id].pivot && setup === 'saga';
+      if (st.steps[i] === 'running') { g.fillStyle = css('blue'); g.globalAlpha = 0.12; g.beginPath(); g.roundRect(left - 6, yy - 11, bw - 20, 22, 6); g.fill(); g.globalAlpha = 1; }
+      icon(g, mk, left + 4, yy, 12, color);
+      text(left + 18, yy, tx(STEP[id].name), pivot ? 'warn' : st.steps[i] === 'todo' ? 'muted' : 'text', '12px "Hanken Grotesk", sans-serif', 'left', bw - 50);
     });
-    g.font = '10px "IBM Plex Mono", monospace'; g.textAlign = 'center';
-    if (s.setup === 'saga') { g.fillStyle = css('ok'); g.fillText(tx({ en: `saved: ${st.saved ?? 0} of 6 done`, vi: `đã lưu: xong ${st.saved ?? 0}/6` }), X.svc, 160 + sh / 2 - 16); }
-    if (s.setup === 'saga') { g.fillStyle = css('warn'); g.fillText(tx({ en: 'yellow = point of no return', vi: 'vàng = không thể quay lại' }), X.svc, 160 + sh / 2 + 12); }
-
-    // The customer.
-    const cust = { waiting: [tx({ en: 'booking…', vi: 'đang đặt…' }), 'muted'], confirmed: [tx({ en: 'confirmed', vi: 'đã xác nhận' }), 'ok'], failed: [tx({ en: 'booking failed', vi: 'đặt thất bại' }), 'muted'], pending: [tx({ en: 'still waiting', vi: 'vẫn đang chờ' }), 'warn'], unknown: [tx({ en: 'no answer', vi: 'không có phản hồi' }), 'bad'] }[st.customer];
-    const money = st.card === 'authorized' || st.card === 'captured';
-    const wrong = (st.customer === 'failed' && (money || st.seat === 'ticketed')) || st.tickets > 1 || st.customer === 'unknown';
-    const cw = Math.min(120, w * 0.17);
-    panel(X.customer, 160, cw, 120, tx({ en: 'Customer', vi: 'Khách hàng' }), wrong ? 'bad' : 'line');
-    g.textAlign = 'center'; g.fillStyle = css(cust[1]); g.font = '700 12px "Hanken Grotesk", sans-serif';
-    g.fillText(cust[0], X.customer, 150, cw - 10);
-    // A hold mid-booking is normal; money still held after "failed" is the bug.
-    const moneyText = st.card === 'captured' ? tx({ en: '$1,240 charged', vi: 'đã trừ 1.240 đô' }) : tx({ en: '$1,240 on hold', vi: 'bị giữ 1.240 đô' });
-    const moneyTone = st.customer === 'confirmed' ? 'ok' : ['failed', 'unknown'].includes(st.customer) ? 'bad' : 'warn';
-    g.font = '11px "Hanken Grotesk", sans-serif'; g.fillStyle = css(money ? moneyTone : 'muted');
-    g.fillText(money ? moneyText : tx({ en: 'card untouched', vi: 'thẻ chưa bị trừ' }), X.customer, 178, cw - 10);
-
-    // The message in flight (none while the last one lingers).
-    if (cur && k < result.hops.length && dwell <= 0) {
-      const at = n => n === 'svc' ? [X.svc, 160] : n === 'customer' ? [X.customer, 160] : [X.partners - pw / 2, Y[n]];
-      const [x1, y1] = at(cur.from), [x2, y2] = at(cur.to);
-      let x = x1 + (x2 - x1) * p, y = y1 + (y2 - y1) * p;
-      if (cur.from === cur.to) { x = X.svc; y = 160 - sh / 2 - 14; }
-      if (cur.kind === 'night') {
-        g.fillStyle = css('bg'); g.globalAlpha = 0.6; g.fillRect(0, 0, w, h); g.globalAlpha = 1;
-        g.fillStyle = css('warn'); g.font = '700 20px "IBM Plex Mono", monospace'; g.textAlign = 'center';
-        g.fillText(tx({ en: '… hours later, 02:00', vi: '… nhiều giờ sau, 02:00' }), w / 2, h / 2);
-      } else {
-        g.font = '700 11px "IBM Plex Mono", monospace'; g.textAlign = 'center';
-        const tw = g.measureText(cur.label).width + 14;
-        g.fillStyle = css(KIND[cur.kind]); g.beginPath(); g.roundRect(x - tw / 2, y - 11, tw, 22, 6); g.fill();
-        g.fillStyle = css('bg'); g.fillText(cur.label, x, y + 1);
-      }
-      if (caption.dataset.k !== String(k)) {
-        caption.dataset.k = String(k);
-        caption.textContent = tx(cur.say);
-        caption.className = `sim-event ${cur.kind === 'bad' ? 'bad-text' : ''}`;
-      }
-    } else if (k >= result.hops.length && caption.dataset.k !== 'end') {
-      caption.dataset.k = 'end';
-      caption.textContent = s.setup === 'twopc'
-        ? tx({ en: 'No booking possible: the partners cannot take part in two-phase commit, so even a good day ends in abort.', vi: 'Không đặt được: các đối tác không tham gia được two-phase commit, nên kể cả ngày bình thường cũng kết thúc bằng huỷ.' })
-        : result.ok
-        ? tx({ en: 'Clean end: everything done, or everything undone and the customer never charged.', vi: 'Kết thúc sạch: hoặc mọi thứ xong, hoặc mọi thứ được hoàn tác và khách chưa bao giờ bị trừ tiền.' })
-        : tx({ en: 'Broken end: what the customer was told does not match what the partners hold.', vi: 'Kết thúc hỏng: điều khách được báo không khớp với những gì các đối tác đang giữ.' });
-      caption.className = `sim-event ${result.ok ? '' : 'bad-text'}`;
+    if (setup === 'saga') {
+      text(x, y + bh / 2 - 34, tx({ en: `saved: ${st.saved ?? 0} of 6 done`, vi: `đã lưu: xong ${st.saved ?? 0}/6` }), 'ok');
+      text(x, y + bh / 2 - 16, tx({ en: 'yellow = point of no return', vi: 'vàng = không thể quay lại' }), 'warn', '10px "IBM Plex Mono", monospace');
     }
   }
-  const initial = () => ({ seat: 'none', tickets: 0, room: 'none', card: 'none', customer: 'waiting', steps: ORDER[s.setup].map(() => 'todo'), saved: 0 });
 
-  function paintBoard() {
-    board.textContent = '';
-    const rows = revealed ? SETUPS : ['today'];
-    board.append(
-      el('p', { class: 'sim-lbl' }, tx({ en: 'Scoreboard: fills in as you watch each run', vi: 'Bảng điểm: tự điền khi bạn xem từng lần chạy' })),
-      el('table', {}, [
-        el('thead', {}, el('tr', {}, [el('th', {}, ''), ...SITUATIONS.map(x => el('th', {}, tx(SITUATION[x])))])),
-        el('tbody', {}, rows.map(st => el('tr', { class: st === s.setup ? 'on' : '' }, [
-          el('th', {}, tx(LABEL[st])),
-          ...SITUATIONS.map(x => {
-            const seen = s.played[`${st}:${x}`], ok = seen && survives(st, x);
-            return el('td', { class: !seen ? 'unseen' : ok ? 'ok' : 'bad' }, !seen ? '·' : ok ? '✓' : '✗');
-          }),
-        ]))),
-      ]),
-    );
+  // The customer: what they were told, and what is on their card.
+  const CUST = {
+    waiting: [{ en: 'booking…', vi: 'đang đặt…' }, 'muted', 'dots'],
+    confirmed: [{ en: 'confirmed', vi: 'đã xác nhận' }, 'ok', 'check'],
+    failed: [{ en: 'told it failed', vi: 'được báo thất bại' }, 'muted', 'cross'],
+    pending: [{ en: 'still waiting', vi: 'vẫn đang chờ' }, 'warn', 'clock'],
+    unknown: [{ en: 'no answer', vi: 'không có phản hồi' }, 'bad', 'clock'],
+  }[st.customer];
+  const money = st.card === 'authorized' || st.card === 'captured';
+  const wrong = (st.customer === 'failed' && (money || st.seat === 'ticketed')) || st.tickets > 1 || st.customer === 'unknown';
+  box('customer', tx({ en: 'Customer', vi: 'Khách hàng' }), wrong);
+  {
+    const [x, y] = P.customer, [bw] = size('customer');
+    badge(g, x, y + 4, tx(CUST[0]), CUST[1], bw - 12, CUST[2]);
+    // A hold mid-booking is normal; money still held after "failed" is the bug.
+    const tone = !money ? 'faint' : st.customer === 'confirmed' ? 'ok' : ['failed', 'unknown'].includes(st.customer) ? 'bad' : 'warn';
+    const what = !money ? tx({ en: 'card untouched', vi: 'thẻ chưa bị trừ' }) : st.card === 'captured' ? tx({ en: '$1,240 charged', vi: 'đã trừ 1.240 đô' }) : tx({ en: '$1,240 on hold', vi: 'bị giữ 1.240 đô' });
+    icon(g, 'card', x - bw / 2 + 20, y + 36, 14, tone);
+    text(x + 8, y + 36, what, tone, '11px "Hanken Grotesk", sans-serif', 'center', bw - 40);
   }
 
-  const pauseBtn = button('', () => setPaused(!paused));
-  function setPaused(v) {
-    paused = v;
-    pauseBtn.textContent = paused ? tx({ en: 'Resume ▶', vi: 'Tiếp tục ▶' }) : tx({ en: 'Pause ❚❚', vi: 'Tạm dừng ❚❚' });
-    pauseBtn.classList.toggle('on', paused);
+  // The message in flight (none while the last one lingers).
+  if (!moving) return;
+  if (cur.kind === 'night') { later(g, w, h, tx({ en: 'Hours later, 02:00', vi: 'Nhiều giờ sau, 02:00' })); return; }
+  if (cur.from === cur.to) {
+    // Only the service talks to itself; its note appears in the space under the checklist.
+    const [x, y] = P[cur.from], [, bh] = size(cur.from);
+    message(g, x, y - bh / 2 + 50 + ORDER[setup].length * 25 + 18 - Math.sin(p * Math.PI) * 5, cur.label, KIND[cur.kind], markOf(cur));
+    return;
   }
-
-  const locked = tx({ en: 'Make your call below to unlock the other setups.', vi: 'Trả lời câu hỏi bên dưới để mở khoá các cách làm còn lại.' });
-  root.append(
-    row(choice(tx({ en: 'Situation', vi: 'Tình huống' }), SITUATIONS.map(x => ({ value: x, label: tx(SITUATION[x]) })), s.situation, v => { s.situation = v; play(); })),
-    row(choice(tx({ en: 'Setup', vi: 'Cách làm' }), SETUPS.map(v => ({
-      value: v, label: tx(LABEL[v]), disabled: !revealed && v !== 'today', title: !revealed && v !== 'today' ? locked : null,
-    })), s.setup, v => { s.setup = v; paintBoard(); play(); })),
-    row(
-      choice(tx({ en: 'Speed', vi: 'Tốc độ' }), [
-        { value: 'slow', label: tx({ en: 'Slow', vi: 'Chậm' }) },
-        { value: 'normal', label: tx({ en: 'Normal', vi: 'Bình thường' }) },
-        { value: 'fast', label: tx({ en: 'Fast', vi: 'Nhanh' }) },
-      ], s.speed, v => { s.speed = v; }),
-      el('div', { class: 'sim-buttons sim-transport' }, [
-        pauseBtn,
-        button(tx({ en: 'Step ›', vi: 'Từng bước ›' }), step),
-        button(tx({ en: 'Replay', vi: 'Chạy lại' }), play),
-      ]),
-    ),
-    chart.el,
-    caption,
-    board,
-    revealed ? '' : el('p', { class: 'sim-note' }, locked),
-  );
-  paintBoard();
-  play();
-
-  const stopResize = onResize(chart.el, () => draw());
-  return () => { cancelAnimationFrame(raf); stopResize(); };
+  const a = edge(P[cur.from], size(cur.from).map(v => v / 2), P[cur.to]);
+  const b = edge(P[cur.to], size(cur.to).map(v => v / 2), P[cur.from]);
+  const e = p < 0.5 ? 2 * p * p : 1 - (-2 * p + 2) ** 2 / 2;   // ease in and out
+  message(g, a[0] + (b[0] - a[0]) * e, a[1] + (b[1] - a[1]) * e, cur.label, KIND[cur.kind], markOf(cur), a);
 }

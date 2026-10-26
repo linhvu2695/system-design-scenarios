@@ -4,7 +4,7 @@
    the buffer fixes only the burst; a single worker fixes nothing and falls behind. */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { timeline, survives, STRATEGIES, SITUATIONS, HOLD, BACKLOG } from '../scenarios/event-ordering/sim.js';
+import { timeline, survives, run, STRATEGIES, SITUATIONS, HOLD, BACKLOG } from '../scenarios/event-ordering/sim.js';
 
 const EXPECTED = {
   //        normal offline retry  crash  dup
@@ -56,4 +56,24 @@ test('the buffer and a single worker cost time', () => {
   assert.ok(four('buffer') - four('today') >= HOLD - 1e-9);
   assert.ok(four('single') - four('today') >= BACKLOG);
   assert.equal(four('seq'), four('today'), 'the seq check adds no delay');
+});
+
+test('the player’s steps cover the timeline end to end, with captions in both languages', () => {
+  for (const st of STRATEGIES)
+    for (const x of SITUATIONS) {
+      const r = run(st, x);
+      assert.equal(r.ok, survives(st, x), `${st}/${x}`);
+      assert.equal(r.steps[0].t0, 0);
+      assert.equal(r.steps.at(-1).t1, r.tl.end);
+      r.steps.forEach((s, i) => {
+        assert.ok(s.t1 >= s.t0, `${st}/${x} step ${i} runs backwards`);
+        if (i) assert.equal(s.t0, r.steps[i - 1].t1, `${st}/${x} gap before step ${i}`);
+        assert.ok(s.say.en && s.say.vi, `${st}/${x} step ${i} needs both languages`);
+      });
+    }
+});
+
+test('a run that goes backwards has a red step where it happens', () => {
+  assert.ok(run('today', 'offline').steps.some(s => s.tone === 'bad'));
+  assert.ok(!run('seq', 'offline').steps.some(s => s.tone === 'bad'));
 });

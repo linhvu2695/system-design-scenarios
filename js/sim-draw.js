@@ -49,6 +49,22 @@ const ICONS = {
     g.beginPath(); g.moveTo(0, -s * .42); g.lineTo(s * .44, s * .36); g.lineTo(-s * .44, s * .36); g.closePath(); g.stroke();
     line(g, 0, -s * .1, 0, s * .1); dot(g, 0, s * .22, s * .04);
   },
+  user(g, s) { ring(g, 0, -s * .16, s * .18); g.beginPath(); g.arc(0, s * .44, s * .36, Math.PI * 1.08, Math.PI * 1.92); g.stroke(); },
+  plane(g, s) {
+    g.beginPath();
+    g.moveTo(s * .44, 0); g.lineTo(-s * .3, -s * .08); g.lineTo(-s * .42, -s * .3); g.lineTo(-s * .48, -s * .3); g.lineTo(-s * .42, 0);
+    g.lineTo(-s * .48, s * .3); g.lineTo(-s * .42, s * .3); g.lineTo(-s * .3, s * .08); g.closePath(); g.stroke();
+    line(g, s * .02, -s * .06, -s * .14, -s * .4); line(g, s * .02, s * .06, -s * .14, s * .4);
+  },
+  bed(g, s) {
+    line(g, -s * .44, -s * .3, -s * .44, s * .32); line(g, s * .44, 0, s * .44, s * .32);
+    rr(g, -s * .44, 0, s * .88, s * .16, s * .03); g.stroke();
+    rr(g, -s * .36, -s * .17, s * .26, s * .15, s * .05); g.stroke();
+  },
+  undo(g, s) {
+    g.beginPath(); g.arc(s * .04, s * .06, s * .3, Math.PI * 1.15, Math.PI * 0.55); g.stroke();
+    g.beginPath(); g.moveTo(-s * .38, -s * .32); g.lineTo(-s * .25, -s * .08); g.lineTo(-s * .02, -s * .2); g.stroke();
+  },
   dots(g, s) { for (const x of [-s * .26, 0, s * .26]) dot(g, x, 0, s * .07); },
 };
 

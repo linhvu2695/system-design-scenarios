@@ -24,6 +24,8 @@
        duration(step)                 seconds on screen at normal speed (default 1)
        tone(step)                     'bad' | 'warn' | null, colours caption, log and track
        height, draw({ g, w, h, result, k, p, moving })
+       footer: [elements],            optional, shown under the caption (stats, notes)
+       onRun(result),                 optional, called when a run starts (update the footer)
      })
 
    step: anything the scenario's draw() understands, plus `say: { en, vi }`.
@@ -84,6 +86,7 @@ export function player(root, { revealed, state }, cfg) {
 
   function play() {
     result = run(s.setup, s.situation);
+    cfg.onRun?.(result);
     clock = start(); logged = 0; shown = -1;
     log.textContent = '';
     buildTrack();
@@ -263,6 +266,7 @@ export function player(root, { revealed, state }, cfg) {
       ]),
     ]),
     caption,
+    ...(cfg.footer || []),
     el('p', { class: 'sim-lbl sim-log-title' }, t('What happened')),
     log,
     board,

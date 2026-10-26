@@ -34,12 +34,12 @@ test('today, retrying a timed-out ticket call without an idempotency key issues 
 test('the saga retries the timed-out ticket with the same key and still holds one ticket', () => {
   const r = run('saga', 'timeout');
   assert.equal(r.final.tickets, 1);
-  assert.ok(r.hops.some(h => h.label.startsWith('ISSUE TICKET ↻')));
+  assert.ok(r.steps.some(h => h.label.startsWith('ISSUE TICKET ↻')));
 });
 
 test('the saga undoes earlier steps newest first and never charges a failed booking', () => {
   const r = run('saga', 'declined');
-  const undos = r.hops.filter(h => h.kind === 'undo').map(h => h.to);
+  const undos = r.steps.filter(h => h.kind === 'undo').map(h => h.to);
   assert.deepEqual(undos, ['hotel', 'airline'], 'room released before seat');
   assert.equal(r.final.card, 'declined');
   assert.equal(r.final.customer, 'failed');
@@ -52,9 +52,9 @@ test('the saga puts every reversible step before the ticket, the point of no ret
 
 test('the saga resumes after a crash from its saved step instead of starting over', () => {
   const r = run('saga', 'crash');
-  const calls = r.hops.filter(h => h.kind === 'call').map(h => h.label);
+  const calls = r.steps.filter(h => h.kind === 'call').map(h => h.label);
   assert.equal(new Set(calls).size, calls.length, 'no step is called twice');
-  assert.ok(r.hops.some(h => h.label === 'RESUME'));
+  assert.ok(r.steps.some(h => h.label === 'RESUME'));
   assert.equal(r.final.customer, 'confirmed');
 });
 
@@ -67,7 +67,7 @@ test('nightly reconciliation cannot undo a ticket issued during the day', () => 
 test('every hop has a caption in both languages and a state snapshot', () => {
   for (const setup of SETUPS)
     for (const x of SITUATIONS)
-      for (const h of run(setup, x).hops) {
+      for (const h of run(setup, x).steps) {
         assert.ok(h.say.en && h.say.vi, `${setup}/${x}: ${h.label}`);
         assert.ok(h.state && Array.isArray(h.state.steps), `${setup}/${x}: ${h.label}`);
       }
