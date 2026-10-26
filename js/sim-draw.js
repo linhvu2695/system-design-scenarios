@@ -65,6 +65,14 @@ const ICONS = {
     g.beginPath(); g.arc(s * .04, s * .06, s * .3, Math.PI * 1.15, Math.PI * 0.55); g.stroke();
     g.beginPath(); g.moveTo(-s * .38, -s * .32); g.lineTo(-s * .25, -s * .08); g.lineTo(-s * .02, -s * .2); g.stroke();
   },
+  tree(g, s) {
+    rr(g, -s * .12, -s * .44, s * .24, s * .2, s * .04); g.stroke();
+    for (const x of [-s * .32, s * .32]) { rr(g, x - s * .12, s * .2, s * .24, s * .2, s * .04); g.stroke(); line(g, 0, -s * .24, x, s * .2); }
+  },
+  table(g, s) {
+    rr(g, -s * .42, -s * .36, s * .84, s * .72, s * .06); g.stroke();
+    line(g, -s * .42, -s * .12, s * .42, -s * .12); line(g, -s * .42, s * .12, s * .42, s * .12); line(g, -s * .1, -s * .36, -s * .1, s * .36);
+  },
   dots(g, s) { for (const x of [-s * .26, 0, s * .26]) dot(g, x, 0, s * .07); },
 };
 

@@ -10,4 +10,5 @@ export default [
   'caching-strategies',
   'distributed-transactions',
   'webhook-retries',
+  'partial-indexes',
 ];
