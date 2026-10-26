@@ -168,6 +168,7 @@ input[type=range]{accent-color:var(--blue);width:180px;max-width:100%}
 .sim-transport{margin-bottom:0}
 .sim-event{margin:8px 0 0;min-height:1.6em;font-size:14px}
 .sim-event.bad-text{color:var(--bad)}
+.sim-log-title{margin:14px 0 6px}
 .sim-story{margin:0 0 12px;padding-left:18px;font-size:14px;color:var(--muted)}
 .sim-story li{margin:2px 0}
 .sim-board{margin-top:14px;overflow-x:auto}

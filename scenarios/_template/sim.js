@@ -1,7 +1,11 @@
 /* Template simulation: one slider driving a bar on a canvas. Replace all of it.
    The contract (mount, revealed, state, cleanup) is documented in js/sim-kit.js;
    rate-limit-algorithms/sim.js is a full example. Keep the model in pure exported
-   functions so tests can pin it, and keep the DOM in mount(). */
+   functions so tests can pin it, and keep the DOM in mount().
+
+   A simulation the visitor watches rather than drives (pick a situation and a setup,
+   see it play out, fill a scoreboard) should use js/sim-player.js instead of building
+   its own controls: webhook-retries/sim.js is the example. */
 
 import { el } from '../../js/dom.js';
 import { tx } from '../../js/i18n.js';

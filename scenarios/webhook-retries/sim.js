@@ -1,19 +1,22 @@
 /* One paid order, played out message by message between Stripe, your webhook
    endpoint, a background worker, Postgres and the print partner. Each box shows what
    it is doing and holding (waiting for a reply, stopped, order paid, inbox row, books
-   printed) and changes as messages land. Pick a situation and a setup; a scoreboard
-   fills in as you watch. Before the visitor answers, only today's handler is unlocked. */
+   printed) and changes as messages land. js/sim-player.js supplies the controls,
+   clock, captions and scoreboard; this file is the model and the drawing. Before the
+   visitor answers, only today's handler is unlocked. */
 
-import { el } from '../../js/dom.js';
 import { tx } from '../../js/i18n.js';
-import { canvas, choice, button, css, row, onResize, reducedMotion } from '../../js/sim-kit.js';
+import { css } from '../../js/sim-kit.js';
+import { node, badge, road, message, later, icon } from '../../js/sim-draw.js';
+import { player } from '../../js/sim-player.js';
 
 export const SETUPS = ['today', 'fast', 'inbox', 'background', 'dedup'];
 export const SITUATIONS = ['normal', 'slow', 'crash', 'dup'];
 
 const INITIAL = { stripe: 'idle', deliveries: 0, api: 'idle', work: 'idle', order: 'unpaid', inbox: 'none', seen: false, printing: false, books: 0 };
 
-/* Play one order. Returns { hops, results, final, books, ok }.
+/* Play one order. Returns { steps, results, final, books, ok, summary }, the shape
+   js/sim-player.js plays; each step is one message (a hop).
    hop: { from, to, label, kind, say: {en, vi}, state } with state a snapshot after it.
    results: how each Stripe delivery ended, '200' | 'timeout' | '500'.
    Pure, so the scoreboard is pinned by tests/webhook-retries.test.js. */
@@ -153,7 +156,13 @@ export function run(setup, situation) {
   }
 
   const final = { ...s };
-  return { hops, results, final, books: final.books, ok: final.books === 1 && results.includes('200') };
+  const ok = final.books === 1 && results.includes('200');
+  const summary = ok
+    ? { en: 'Correct: one book printed, and Stripe has its 200.', vi: 'Đúng: in một cuốn, và Stripe đã nhận 200.' }
+    : final.books === 0
+    ? { en: 'Broken: someone paid, and no book will ever be printed. Nothing will retry it.', vi: 'Hỏng: khách đã trả tiền, và sẽ không có cuốn sách nào được in. Không gì thử lại nó.' }
+    : { en: `Broken: ${final.books} books for one order.`, vi: `Hỏng: ${final.books} cuốn cho một đơn hàng.` };
+  return { steps: hops, results, final, books: final.books, ok, summary };
 }
 
 export const survives = (setup, situation) => run(setup, situation).ok;
@@ -173,244 +182,137 @@ const SITUATION = {
 };
 const KIND = { call: 'blue', ok: 'ok', bad: 'bad', note: 'muted', wait: 'warn', late: 'warn', gap: 'warn' };
 
-export function mount(root, { revealed, state }) {
-  const s = Object.assign(state, { setup: 'today', situation: 'slow', played: {}, ...state });
-  if (!revealed) s.setup = 'today';
+export function mount(root, ctx) {
+  const H = 360;
+  return player(root, ctx, {
+    situations: SITUATIONS.map(x => ({ value: x, label: tx(SITUATION[x]) })),
+    setups: SETUPS.map(x => ({ value: x, label: tx(LABEL[x]) })),
+    initial: { situation: 'slow' },
+    run, survives, height: H,
+    duration: h => h.kind === 'gap' ? 1.6 : h.from === h.to ? 1.3 : 1,
+    tone: h => h.kind === 'bad' ? 'bad' : h.kind === 'late' || h.kind === 'wait' ? 'warn' : null,
+    draw: frame => draw(frame, ctx.state.setup ?? 'today', H),
+  });
+}
 
-  const H = 340;
-  const chart = canvas(H);
-  const caption = el('p', { class: 'sim-event', 'aria-live': 'polite' });
-  const log = el('ol', { class: 'sim-story' });
-  const board = el('div', { class: 'sim-board' });
-  const reduce = reducedMotion();
-  // Seconds per message at normal speed; after landing, a message lingers so its
-  // caption can be read before the next one starts.
-  const DUR = { self: 1.3, gap: 1.6, move: 1.0 }, DWELL = 1.1;
-  const SPEEDS = { slow: 0.5, normal: 1, fast: 2 };
-  if (!SPEEDS[s.speed]) s.speed = 'normal';
-  const dur = h => (reduce ? 0.05 : h.kind === 'gap' ? DUR.gap : h.from === h.to ? DUR.self : DUR.move);
-  // k: the message in flight; p: how far it has travelled (0..1); dwell: seconds left
-  // to linger on the one that just landed; logged: how many captions are in the log.
-  let result, k = 0, p = 0, dwell = 0, logged = 0, paused = false, last = 0, raf = 0;
+/* Where a message leaves or enters a box: the edge point facing the other box. */
+function edge([cx, cy], [hw, hh], [tx2, ty2]) {
+  const dx = tx2 - cx, dy = ty2 - cy;
+  const t = Math.min(dx ? hw / Math.abs(dx) : Infinity, dy ? hh / Math.abs(dy) : Infinity);
+  return [cx + dx * t, cy + dy * t];
+}
 
-  function play() {
-    result = run(s.setup, s.situation);
-    k = 0; p = 0; dwell = 0; logged = 0;
-    log.textContent = '';
-    delete caption.dataset.k;
-    setPaused(false);
-    cancelAnimationFrame(raf);
-    if (reduce) { k = result.hops.length; draw(); finish(); return; }
-    last = performance.now() / 1000;
-    raf = requestAnimationFrame(frame);
+/* Each service's colour and icon. */
+const LOOK = {
+  stripe: { color: 'violet', icon: 'card' },
+  api: { color: 'blue', icon: 'server' },
+  work: { color: 'cat-queue', icon: 'gear' },
+  db: { color: 'cat-caching', icon: 'db' },
+  printer: { color: 'pink', icon: 'printer' },
+};
+/* A message's icon: what happened to it, or what it is. */
+const markOf = h => /TIMEOUT|EXPIRED/.test(h.label) ? 'clock' : h.label === 'STOPPED' ? 'stop'
+  : ({ call: 'mail', ok: 'check', bad: 'cross', note: 'dots', late: 'clock', wait: 'clock' })[h.kind];
+
+/* The five boxes as they stand before step k, and step k's message in flight. */
+function draw({ g, w, h, result, k, p, moving }, setup, H) {
+  const n = result.steps.length;
+  const cur = result.steps[Math.min(k, n - 1)];
+  const st = k === 0 ? INITIAL : result.steps[k - 1].state;
+  const bw = Math.min(230, w * 0.28), bh = 100;
+  const P = { stripe: [w * 0.11, H / 2], api: [w * 0.45, 70], work: [w * 0.45, H - 70], db: [w * 0.83, 70], printer: [w * 0.83, H - 70] };
+  const size = id => id === 'stripe' ? [Math.min(170, w * 0.2), 140] : [bw, bh];
+  const hasWorker = setup === 'inbox' || setup === 'background';
+  // The message being drawn, or the one that just landed while its caption lingers.
+  const focus = moving ? cur : k > 0 && k < n ? result.steps[k - 1] : null;
+  const isActive = id => focus && focus.kind !== 'gap' && (focus.from === id || focus.to === id);
+  g.clearRect(0, 0, w, h);
+
+  // Roads; the one a message is travelling lights up in the message's colour.
+  const roads = [['stripe', 'api'], ['api', 'db'], ...(hasWorker ? [['api', 'work'], ['work', 'db'], ['work', 'printer']] : [['api', 'printer']])];
+  for (const [a, b] of roads) {
+    const lit = moving && cur.from !== cur.to && ((cur.from === a && cur.to === b) || (cur.from === b && cur.to === a));
+    road(g, P[a], P[b], lit ? KIND[cur.kind] : null);
   }
 
-  function advance(dt) {
-    if (k >= result.hops.length) return;
-    if (dwell > 0) { dwell -= dt; return; }
-    p += dt / dur(result.hops[k]);
-    if (p >= 1) { k++; p = 0; dwell = reduce ? 0 : DWELL; }
+  const box = (id, title, alert, dim) => {
+    const [x, y] = P[id], [bw2, bh2] = size(id);
+    node(g, { x, y, w: bw2, h: bh2, title, ...LOOK[id], active: isActive(id) && !dim, alert, dim });
+  };
+  const inner = id => { const [x, y] = P[id], [wd] = size(id); return { x, y, wd }; };
+  const note = (id, dy, text, color = 'muted') => {
+    const { x, y, wd } = inner(id);
+    g.font = '11px "IBM Plex Mono", monospace'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillStyle = css(color);
+    g.fillText(text, x, y + dy, wd - 16);
+  };
+
+  // Stripe: how its delivery stands, and one envelope per delivery.
+  const stripe = {
+    idle: ['—', 'faint', null],
+    waiting: [tx({ en: 'waiting for 2xx', vi: 'đang chờ 2xx' }), 'warn', 'clock'],
+    ok: [tx({ en: '200 received', vi: 'đã nhận 200' }), 'ok', 'check'],
+    timeout: [tx({ en: 'timed out', vi: 'hết thời gian chờ' }), 'bad', 'clock'],
+    500: [tx({ en: 'got 500', vi: 'nhận 500' }), 'bad', 'cross'],
+  }[st.stripe];
+  box('stripe', 'Stripe', stripe[1] === 'bad');
+  {
+    const { x, y, wd } = inner('stripe');
+    badge(g, x, y + 4, stripe[0], stripe[1], wd - 14, stripe[2]);
+    for (let i = 0; i < st.deliveries; i++) icon(g, 'mail', x - (st.deliveries - 1) * 11 + i * 22, y + 40, 16, 'violet');
+    if (!st.deliveries) note('stripe', 40, tx({ en: 'no deliveries', vi: 'chưa gửi' }), 'faint');
   }
 
-  function frame() {
-    const now = performance.now() / 1000;
-    if (!paused) advance((now - last) * SPEEDS[s.speed]);
-    last = now;
-    draw();
-    if (k < result.hops.length) raf = requestAnimationFrame(frame);
-    else finish();
+  // Your endpoint, and the worker or in-memory background job.
+  const RUN = {
+    idle: [{ en: 'idle', vi: 'rảnh' }, 'faint', 'dots'],
+    busy: [{ en: 'handling', vi: 'đang xử lý' }, 'blue', 'gear'],
+    waiting: [{ en: 'waiting on printer', vi: 'chờ máy in' }, 'warn', 'clock'],
+    stopped: [{ en: 'stopped by a deploy', vi: 'bị deploy dừng' }, 'bad', 'stop'],
+  };
+  box('api', tx({ en: 'Your endpoint', vi: 'Endpoint của bạn' }), st.api === 'stopped');
+  { const { x, y, wd } = inner('api'), [text, color, mark] = RUN[st.api]; badge(g, x, y + 12, tx(text), color, wd - 14, mark); }
+  const workTitle = setup === 'inbox' ? tx({ en: 'Worker', vi: 'Worker' }) : setup === 'background' ? tx({ en: 'Background job', vi: 'Job background' }) : tx({ en: 'Worker', vi: 'Worker' });
+  box('work', workTitle, st.work === 'stopped', !hasWorker);
+  if (hasWorker) {
+    const { x, y, wd } = inner('work'), [text, color, mark] = RUN[st.work === 'busy' ? 'busy' : st.work];
+    badge(g, x, y + 6, tx(text), color, wd - 14, mark);
+    if (setup === 'background') note('work', 34, tx({ en: 'in the endpoint’s memory', vi: 'trong bộ nhớ của endpoint' }), 'faint');
+  } else note('work', 10, tx({ en: 'not used in this setup', vi: 'không dùng ở cách này' }), 'muted');
+
+  // Postgres: the order, and the inbox or processed_events table.
+  box('db', 'Postgres');
+  {
+    const { x, y, wd } = inner('db'), paid = st.order === 'paid';
+    badge(g, x, y + 4, paid ? tx({ en: 'order paid', vi: 'đơn đã thanh toán' }) : tx({ en: 'order unpaid', vi: 'đơn chưa thanh toán' }), paid ? 'ok' : 'faint', wd - 14, paid ? 'check' : 'dots');
+    if (setup === 'inbox') note('db', 32, tx({ en: `inbox row: ${st.inbox === 'none' ? '—' : st.inbox}`, vi: `dòng inbox: ${{ none: '—', pending: 'chờ', claimed: 'đã nhận', done: 'xong' }[st.inbox]}` }), st.inbox === 'done' ? 'ok' : st.inbox === 'none' ? 'faint' : 'cat-caching');
+    if (setup === 'dedup') note('db', 32, `processed_events: ${st.seen ? '1 ID' : '—'}`, st.seen ? 'cat-caching' : 'faint');
   }
 
-  /* Paused: deliver the current message (or skip the linger) and stop again. */
-  function step() {
-    if (!result || k >= result.hops.length) return;
-    setPaused(true);
-    if (dwell > 0) dwell = 0;
-    else { k++; p = 0; dwell = 0; }
-    draw();
-    if (k >= result.hops.length) finish();
+  // The print partner: one book icon per printed book. Two is a duplicate; none at
+  // the end is a lost order.
+  const lost = k >= n && st.books === 0;
+  box('printer', tx({ en: 'Print partner', vi: 'Đối tác in' }), st.books > 1 || lost);
+  {
+    const { x, y } = inner('printer');
+    if (st.books) {
+      const tone = st.books > 1 ? 'bad' : 'ok';
+      for (let i = 0; i < st.books; i++) icon(g, 'book', x - (st.books - 1) * 14 + i * 28 - 30, y + 12, 26, tone);
+      g.font = '700 13px "Hanken Grotesk", sans-serif'; g.textAlign = 'left'; g.textBaseline = 'middle'; g.fillStyle = css(tone);
+      g.fillText(st.books > 1 ? tx({ en: `${st.books} books!`, vi: `${st.books} cuốn!` }) : tx({ en: '1 book', vi: '1 cuốn' }), x + (st.books - 1) * 14 - 4, y + 12);
+    } else note('printer', 12, lost ? tx({ en: 'never printed', vi: 'không bao giờ được in' }) : tx({ en: 'no book yet', vi: 'chưa có sách' }), lost ? 'bad' : 'faint');
+    if (st.printing) note('printer', 38, tx({ en: 'printing…', vi: 'đang in…' }), 'warn');
   }
 
-  function finish() {
-    s.played[`${s.setup}:${s.situation}`] = true;
-    paintBoard();
+  // The message in flight (none while the last one lingers).
+  if (!moving) return;
+  if (cur.kind === 'gap') { later(g, w, h, tx({ en: 'Later…', vi: 'Một lúc sau…' })); return; }
+  if (cur.from === cur.to) {
+    const [x, y] = P[cur.from], [, ht] = size(cur.from);
+    message(g, x, y - ht / 2 - 4 - Math.sin(p * Math.PI) * 6, cur.label, KIND[cur.kind], markOf(cur));
+    return;
   }
-
-  /* Where a message leaves or enters a box: the edge point facing the other box. */
-  function edge([cx, cy], [hw, hh], [tx2, ty2]) {
-    const dx = tx2 - cx, dy = ty2 - cy;
-    const t = Math.min(dx ? hw / Math.abs(dx) : Infinity, dy ? hh / Math.abs(dy) : Infinity);
-    return [cx + dx * t, cy + dy * t];
-  }
-
-  function draw() {
-    const { w, h } = chart.fit();
-    const g = chart.g;
-    const n = result.hops.length;
-    const cur = result.hops[Math.min(k, n - 1)];
-    const st = k === 0 ? INITIAL : result.hops[k - 1].state;
-    const bw = Math.min(200, w * 0.27), bh = 82;
-    const P = { stripe: [w * 0.11, H / 2], api: [w * 0.45, 72], work: [w * 0.45, H - 72], db: [w * 0.83, 72], printer: [w * 0.83, H - 72] };
-    const SIZE = { stripe: [Math.min(150, w * 0.19), 120] };
-    const size = id => SIZE[id] || [bw, bh];
-    const hasWorker = s.setup === 'inbox' || s.setup === 'background';
-    g.clearRect(0, 0, w, h);
-    g.textBaseline = 'middle';
-
-    // Roads between boxes that talk to each other in this setup.
-    g.strokeStyle = css('line'); g.setLineDash([3, 5]);
-    const roads = [['stripe', 'api'], ['api', 'db'], ...(hasWorker ? [['api', 'work'], ['work', 'db'], ['work', 'printer']] : [['api', 'printer']])];
-    for (const [a, b] of roads) { g.beginPath(); g.moveTo(...P[a]); g.lineTo(...P[b]); g.stroke(); }
-    g.setLineDash([]);
-
-    const panel = (id, title, border = 'line', dim = false) => {
-      const [x, y] = P[id], [wd, ht] = size(id);
-      g.globalAlpha = dim ? 0.4 : 1;
-      g.fillStyle = css('surface2'); g.strokeStyle = css(border); g.lineWidth = border === 'line' ? 1 : 2;
-      g.beginPath(); g.roundRect(x - wd / 2, y - ht / 2, wd, ht, 10); g.fill(); g.stroke(); g.lineWidth = 1;
-      g.fillStyle = css('muted'); g.font = '600 10px "IBM Plex Mono", monospace'; g.textAlign = 'left';
-      g.fillText(title.toUpperCase(), x - wd / 2 + 10, y - ht / 2 + 13, wd - 20);
-      g.globalAlpha = 1;
-    };
-    const pill = (id, dy, text, color) => {
-      const [x, y] = P[id], [wd] = size(id);
-      g.font = '600 12px "Hanken Grotesk", sans-serif'; g.textAlign = 'center';
-      const tw = Math.min(wd - 16, g.measureText(text).width + 18);
-      g.fillStyle = css(color); g.globalAlpha = 0.18; g.beginPath(); g.roundRect(x - tw / 2, y + dy - 12, tw, 24, 12); g.fill(); g.globalAlpha = 1;
-      g.fillStyle = css(color); g.fillText(text, x, y + dy + 1, tw - 8);
-    };
-    const small = (id, dy, text, color = 'muted') => {
-      const [x, y] = P[id], [wd] = size(id);
-      g.font = '11px "IBM Plex Mono", monospace'; g.textAlign = 'center'; g.fillStyle = css(color);
-      g.fillText(text, x, y + dy, wd - 14);
-    };
-
-    // Stripe.
-    const stripe = { idle: ['—', 'faint'], waiting: [tx({ en: 'waiting for 2xx', vi: 'đang chờ 2xx' }), 'warn'], ok: [tx({ en: '200 received', vi: 'đã nhận 200' }), 'ok'], timeout: [tx({ en: 'timed out', vi: 'hết thời gian chờ' }), 'bad'], 500: [tx({ en: 'got 500', vi: 'nhận 500' }), 'bad'] }[st.stripe];
-    panel('stripe', 'Stripe', stripe[1] === 'bad' ? 'bad' : 'line');
-    pill('stripe', 0, stripe[0], stripe[1]);
-    small('stripe', 32, tx({ en: `deliveries: ${st.deliveries}`, vi: `số lần gửi: ${st.deliveries}` }));
-
-    // Your endpoint.
-    const api = { idle: ['idle', 'faint'], busy: ['handling', 'blue'], waiting: ['waiting on printer', 'warn'], stopped: ['stopped', 'bad'] }[st.api];
-    const apiVi = { idle: 'rảnh', busy: 'đang xử lý', waiting: 'chờ máy in', stopped: 'đã dừng' }[st.api];
-    panel('api', tx({ en: 'Your endpoint', vi: 'Endpoint của bạn' }), st.api === 'stopped' ? 'bad' : 'line');
-    pill('api', 6, tx({ en: api[0], vi: apiVi }), api[1]);
-
-    // The worker, or the in-memory background job.
-    const workTitle = s.setup === 'inbox' ? tx({ en: 'Worker', vi: 'Worker' }) : s.setup === 'background' ? tx({ en: 'Background job (same container)', vi: 'Job background (cùng container)' }) : tx({ en: 'No workers', vi: 'Không có worker' });
-    const work = { idle: [tx({ en: 'idle', vi: 'rảnh' }), 'faint'], busy: [tx({ en: 'working', vi: 'đang làm' }), 'blue'], stopped: [tx({ en: 'stopped', vi: 'đã dừng' }), 'bad'] }[st.work];
-    panel('work', workTitle, st.work === 'stopped' ? 'bad' : 'line', !hasWorker);
-    if (hasWorker) pill('work', 6, work[0], work[1]);
-
-    // Postgres: the order, and the inbox or processed_events table.
-    panel('db', 'Postgres');
-    pill('db', -2, st.order === 'paid' ? tx({ en: 'order: paid', vi: 'đơn: đã thanh toán' }) : tx({ en: 'order: unpaid', vi: 'đơn: chưa thanh toán' }), st.order === 'paid' ? 'ok' : 'muted');
-    if (s.setup === 'inbox') small('db', 26, tx({ en: `inbox row: ${st.inbox === 'none' ? '—' : st.inbox}`, vi: `dòng inbox: ${{ none: '—', pending: 'chờ', claimed: 'đã nhận', done: 'xong' }[st.inbox]}` }), st.inbox === 'done' ? 'ok' : 'muted');
-    if (s.setup === 'dedup') small('db', 26, tx({ en: `processed_events: ${st.seen ? '1 ID' : '—'}`, vi: `processed_events: ${st.seen ? '1 ID' : '—'}` }));
-
-    // The print partner and what it has printed.
-    const booksText = st.books === 0 ? tx({ en: 'no book yet', vi: 'chưa có sách' }) : st.books === 1 ? tx({ en: '1 book', vi: '1 cuốn' }) : tx({ en: `${st.books} books!`, vi: `${st.books} cuốn!` });
-    panel('printer', tx({ en: 'Print partner', vi: 'Đối tác in' }), st.books > 1 ? 'bad' : 'line');
-    pill('printer', -2, booksText, st.books === 0 ? 'muted' : st.books === 1 ? 'ok' : 'bad');
-    if (st.printing) small('printer', 26, tx({ en: 'printing…', vi: 'đang in…' }), 'warn');
-
-    // The message in flight (none while the last one lingers).
-    if (cur && k < n && dwell <= 0) {
-      if (cur.kind === 'gap') {
-        g.fillStyle = css('bg'); g.globalAlpha = 0.6; g.fillRect(0, 0, w, h); g.globalAlpha = 1;
-        g.fillStyle = css('warn'); g.font = '700 20px "IBM Plex Mono", monospace'; g.textAlign = 'center';
-        g.fillText(tx({ en: '… later', vi: '… một lúc sau' }), w / 2, h / 2);
-      } else {
-        let x, y;
-        if (cur.from === cur.to) { x = P[cur.from][0]; y = P[cur.from][1] - size(cur.from)[1] / 2 - 2; }
-        else {
-          const [x1, y1] = edge(P[cur.from], size(cur.from).map(v => v / 2), P[cur.to]);
-          const [x2, y2] = edge(P[cur.to], size(cur.to).map(v => v / 2), P[cur.from]);
-          x = x1 + (x2 - x1) * p; y = y1 + (y2 - y1) * p;
-        }
-        g.font = '700 11px "IBM Plex Mono", monospace'; g.textAlign = 'center';
-        const tw = g.measureText(cur.label).width + 14;
-        x = Math.min(Math.max(x, tw / 2 + 2), w - tw / 2 - 2);
-        g.fillStyle = css(KIND[cur.kind]); g.beginPath(); g.roundRect(x - tw / 2, y - 11, tw, 22, 6); g.fill();
-        g.fillStyle = css('bg'); g.fillText(cur.label, x, y + 1);
-      }
-    }
-
-    // Caption and log: every message that has started, in order.
-    while (logged < Math.min(k + 1, n)) {
-      const hp = result.hops[logged++];
-      const tone = hp.kind === 'bad' ? 'bad' : hp.kind === 'late' || hp.kind === 'wait' ? 'warn' : null;
-      log.append(el('li', { style: tone ? `color:${css(tone)}` : null }, tx(hp.say)));
-    }
-    if (k < n && caption.dataset.k !== String(k)) {
-      caption.dataset.k = String(k);
-      caption.textContent = tx(cur.say);
-      caption.className = `sim-event ${cur.kind === 'bad' ? 'bad-text' : ''}`;
-    } else if (k >= n && caption.dataset.k !== 'end') {
-      caption.dataset.k = 'end';
-      caption.textContent = result.ok
-        ? tx({ en: 'Correct: one book printed, and Stripe has its 200.', vi: 'Đúng: in một cuốn, và Stripe đã nhận 200.' })
-        : result.books === 0
-        ? tx({ en: 'Broken: someone paid, and no book will ever be printed. Nothing will retry it.', vi: 'Hỏng: khách đã trả tiền, và sẽ không có cuốn sách nào được in. Không gì thử lại nó.' })
-        : tx({ en: `Broken: ${result.books} books for one order.`, vi: `Hỏng: ${result.books} cuốn cho một đơn hàng.` });
-      caption.className = `sim-event ${result.ok ? '' : 'bad-text'}`;
-    }
-  }
-
-  function paintBoard() {
-    board.textContent = '';
-    const rows = revealed ? SETUPS : ['today'];
-    board.append(
-      el('p', { class: 'sim-lbl' }, tx({ en: 'Scoreboard: fills in as you watch each run', vi: 'Bảng điểm: tự điền khi bạn xem từng lần chạy' })),
-      el('table', {}, [
-        el('thead', {}, el('tr', {}, [el('th', {}, ''), ...SITUATIONS.map(x => el('th', {}, tx(SITUATION[x])))])),
-        el('tbody', {}, rows.map(st => el('tr', { class: st === s.setup ? 'on' : '' }, [
-          el('th', {}, tx(LABEL[st])),
-          ...SITUATIONS.map(x => {
-            const seen = s.played[`${st}:${x}`], ok = seen && survives(st, x);
-            return el('td', { class: !seen ? 'unseen' : ok ? 'ok' : 'bad' }, !seen ? '·' : ok ? '✓' : '✗');
-          }),
-        ]))),
-      ]),
-    );
-  }
-
-  const pauseBtn = button('', () => setPaused(!paused));
-  function setPaused(v) {
-    paused = v;
-    pauseBtn.textContent = paused ? tx({ en: 'Resume ▶', vi: 'Tiếp tục ▶' }) : tx({ en: 'Pause ❚❚', vi: 'Tạm dừng ❚❚' });
-    pauseBtn.classList.toggle('on', paused);
-  }
-
-  const locked = tx({ en: 'Make your call below to unlock the other setups.', vi: 'Trả lời câu hỏi bên dưới để mở khoá các cách làm còn lại.' });
-  root.append(
-    row(choice(tx({ en: 'Situation', vi: 'Tình huống' }), SITUATIONS.map(x => ({ value: x, label: tx(SITUATION[x]) })), s.situation, v => { s.situation = v; play(); })),
-    row(choice(tx({ en: 'Setup', vi: 'Cách làm' }), SETUPS.map(v => ({
-      value: v, label: tx(LABEL[v]), disabled: !revealed && v !== 'today', title: !revealed && v !== 'today' ? locked : null,
-    })), s.setup, v => { s.setup = v; paintBoard(); play(); })),
-    row(
-      choice(tx({ en: 'Speed', vi: 'Tốc độ' }), [
-        { value: 'slow', label: tx({ en: 'Slow', vi: 'Chậm' }) },
-        { value: 'normal', label: tx({ en: 'Normal', vi: 'Bình thường' }) },
-        { value: 'fast', label: tx({ en: 'Fast', vi: 'Nhanh' }) },
-      ], s.speed, v => { s.speed = v; }),
-      el('div', { class: 'sim-buttons sim-transport' }, [
-        pauseBtn,
-        button(tx({ en: 'Step ›', vi: 'Từng bước ›' }), step),
-        button(tx({ en: 'Replay', vi: 'Chạy lại' }), play),
-      ]),
-    ),
-    chart.el,
-    caption,
-    el('p', { class: 'sim-lbl', style: 'margin-top:14px' }, tx({ en: 'What happened', vi: 'Diễn biến' })),
-    log,
-    board,
-    revealed ? '' : el('p', { class: 'sim-note' }, locked),
-  );
-  paintBoard();
-  play();
-
-  const stopResize = onResize(chart.el, () => draw());
-  return () => { cancelAnimationFrame(raf); stopResize(); };
+  const a = edge(P[cur.from], size(cur.from).map(v => v / 2), P[cur.to]);
+  const b = edge(P[cur.to], size(cur.to).map(v => v / 2), P[cur.from]);
+  const e = p < 0.5 ? 2 * p * p : 1 - (-2 * p + 2) ** 2 / 2;   // ease in and out
+  message(g, a[0] + (b[0] - a[0]) * e, a[1] + (b[1] - a[1]) * e, cur.label, KIND[cur.kind], markOf(cur), a);
 }

@@ -43,6 +43,10 @@ js/i18n.js            EN/VI: t() for UI strings, tx() for { en, vi } content
 js/dom.js             el() and md(), the small, escape-first text formatter
 js/progress.js        what this browser has answered (localStorage)
 js/sim-kit.js         controls, canvas, animation and seeded randomness for simulations
+js/sim-player.js      the shared player for watched simulations: situation × setup
+                      pickers, speed, pause/step/replay, captions, log, scoreboard
+js/sim-draw.js        canvas pieces for services passing messages: boxes with icons,
+                      roads, messages in flight, the "later" card
 scenarios/index.js    the ordered list of scenario ids
 scenarios/categories.js  the categories (filter order, labels); colors are in style.css
 scenarios/<id>/       index.js (content) + sim.js (simulation)

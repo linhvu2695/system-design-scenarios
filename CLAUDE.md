@@ -33,6 +33,9 @@ needs to change it safely.
 5. **Simulations** follow the contract in `js/sim-kit.js`: pure, exported model functions
    (tested), DOM only in `mount()`, cleanup stops every timer and observer, seeded
    randomness via `rng()`, and answer-revealing controls locked while `!revealed`.
+   A simulation you watch (situations × setups, played step by step, with a scoreboard)
+   uses `js/sim-player.js` for its controls, clock, captions and scoreboard, and only
+   supplies `run()` and `draw()`. Don't hand-roll another transport bar.
 6. **Browser storage** (`localStorage`) is per-visitor convenience only, and every access
    is wrapped in try/catch.
 

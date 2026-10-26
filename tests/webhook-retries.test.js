@@ -25,7 +25,7 @@ for (const setup of SETUPS)
 test('today, a slow printer makes Stripe time out while the handler keeps going, and the retry prints a second book', () => {
   const r = run('today', 'slow');
   assert.deepEqual(r.results, ['timeout', '200']);
-  assert.ok(r.hops.some(h => h.label === '200' && h.kind === 'late'), 'the late 200 reaches nobody');
+  assert.ok(r.steps.some(h => h.label === '200' && h.kind === 'late'), 'the late 200 reaches nobody');
   assert.equal(r.books, 2);
 });
 
@@ -52,13 +52,13 @@ test('the inbox stores the event before replying, never times out, and a dead wo
   for (const x of SITUATIONS) {
     const r = run('inbox', x);
     assert.ok(r.results.every(v => v === '200'), x);
-    assert.ok(!r.hops.some(h => h.label === 'TIMEOUT'), x);
-    const stored = r.hops.findIndex(h => h.label === 'OK' && h.from === 'db' && h.to === 'api');
-    const replied = r.hops.findIndex(h => h.label === '200');
+    assert.ok(!r.steps.some(h => h.label === 'TIMEOUT'), x);
+    const stored = r.steps.findIndex(h => h.label === 'OK' && h.from === 'db' && h.to === 'api');
+    const replied = r.steps.findIndex(h => h.label === '200');
     assert.ok(stored >= 0 && stored < replied, `${x}: the 200 must come after the insert`);
   }
   const crash = run('inbox', 'crash');
-  assert.ok(crash.hops.some(h => h.label === 'LEASE EXPIRED'));
+  assert.ok(crash.steps.some(h => h.label === 'LEASE EXPIRED'));
   assert.equal(crash.final.inbox, 'done');
 });
 
@@ -66,7 +66,7 @@ test('every message has a caption in both languages and moves between known boxe
   const boxes = new Set(['stripe', 'api', 'work', 'db', 'printer']);
   for (const setup of SETUPS)
     for (const x of SITUATIONS)
-      for (const h of run(setup, x).hops) {
+      for (const h of run(setup, x).steps) {
         assert.ok(boxes.has(h.from) && boxes.has(h.to), `${setup}/${x}: ${h.from} → ${h.to}`);
         assert.ok(h.say.en && h.say.vi, `${setup}/${x}: ${h.label} needs both languages`);
       }
