@@ -209,6 +209,46 @@ input[type=range]{accent-color:var(--blue);width:180px;max-width:100%}
 .speed .ico{width:14px;height:14px;margin-right:4px}
 .speed button{font:600 12px var(--mono);color:var(--muted);background:transparent;border:0;border-radius:7px;padding:5px 9px;cursor:pointer}
 .speed button.on{background:var(--surface2);color:var(--text)}
+
+/* ---- the shared scoreboard (js/sim-scoreboard.js) ---- */
+.score{margin-top:22px}
+.score-top{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px}
+.score-top .deck-title{margin:0}
+.score-count{font:500 12px var(--mono);color:var(--muted)}
+.score-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.fill-all .ico{width:14px;height:14px;color:var(--blue)}
+.cell.pop{animation:cell-pop .45s cubic-bezier(.3,1.5,.5,1) both}
+@keyframes cell-pop{from{transform:scale(.4) rotateX(90deg);opacity:0}to{transform:none;opacity:1}}
+.score-scroll{overflow-x:auto}
+.score-grid{display:grid;grid-template-columns:minmax(170px,1.6fr) repeat(var(--cols),minmax(64px,1fr));gap:6px;min-width:calc(170px + var(--cols) * 70px)}
+.score-tr{display:contents}
+.score-col{display:flex;flex-direction:column;align-items:center;justify-content:end;gap:5px;padding:0 4px 4px;text-align:center;
+  font:500 11.5px var(--body);line-height:1.25;color:var(--muted)}
+.score-col .ico{color:var(--warn)}
+.score-row{display:flex;align-items:center;gap:8px;min-width:0;padding:0 10px;border-radius:10px;font:500 13px var(--body);color:var(--muted);
+  border:1px solid transparent}
+.score-row .ico{color:var(--blue)}
+.score-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.score-row .lock{width:13px;height:13px;color:var(--faint)}
+.score-tr.on .score-row{color:var(--text);background:var(--surface2);border-color:var(--line)}
+.score-tr.shut .score-row{opacity:.5}
+.score-tr.champ .score-row{color:var(--text);border-color:color-mix(in srgb,var(--ok) 50%,transparent);background:color-mix(in srgb,var(--ok) 10%,var(--bg2))}
+.score-tr.champ .score-row{flex-wrap:wrap;row-gap:1px;align-content:center}
+.champ-tag{flex-basis:100%;display:flex;align-items:center;gap:4px;padding-left:24px;font:600 10.5px var(--mono);color:var(--ok);white-space:nowrap}
+.champ-tag .ico{width:12px;height:12px;color:var(--ok)}
+.score-td{display:block}
+.cell{display:grid;place-items:center;width:100%;height:42px;padding:12px;border-radius:10px;cursor:pointer;transition:.16s;
+  border:1px dashed var(--line);background:transparent;color:var(--faint)}
+.cell svg{width:18px;height:18px}
+.cell.unseen svg{opacity:.35}
+.cell.unseen:hover{border-style:solid;border-color:var(--faint);color:var(--text)}
+.cell.unseen:hover svg{opacity:1}
+.cell.ok{border:1px solid color-mix(in srgb,var(--ok) 55%,transparent);background:color-mix(in srgb,var(--ok) 16%,var(--bg2));color:var(--ok)}
+.cell.bad{border:1px solid color-mix(in srgb,var(--bad) 55%,transparent);background:color-mix(in srgb,var(--bad) 14%,var(--bg2));color:var(--bad)}
+.cell.ok:hover,.cell.bad:hover{filter:brightness(1.2);transform:translateY(-1px)}
+.cell.here{box-shadow:0 0 0 2px var(--bg),0 0 0 4px var(--blue)}
+.cell:disabled{cursor:not-allowed;opacity:.4}
+.cell:disabled:hover{transform:none}
 .sim-story{margin:0 0 12px;padding-left:18px;font-size:14px;color:var(--muted)}
 .sim-story li{margin:2px 0}
 .sim-board{margin-top:14px;overflow-x:auto}
@@ -233,6 +273,13 @@ input[type=range]{accent-color:var(--blue);width:180px;max-width:100%}
   .topics{display:flex;gap:6px;overflow-x:auto;padding-bottom:2px}
   .topic-link{white-space:nowrap;font-size:13px;padding:5px 11px;border-radius:99px;border-color:var(--line);background:var(--surface)}
   .topic-link.empty{display:none}
+  /* The scoreboard: icon-only column heads (the name stays in the tooltip). */
+  .score-grid{grid-template-columns:minmax(0,1fr) repeat(var(--cols),40px);gap:5px;min-width:0}
+  .score-col span:not(.ico){display:none}
+  .score-row{padding:0 6px;font-size:12.5px;gap:6px}
+  .cell{height:38px;padding:10px}
+  .champ-tag{padding-left:0;overflow:hidden;text-overflow:ellipsis;display:block}
+  .champ-tag .ico{display:none}
   main{padding:20px 16px 32px}
   footer{padding:14px 16px}
   .scenario h2{font-size:25px}

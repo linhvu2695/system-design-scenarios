@@ -8,7 +8,8 @@
      a video-player bar         play/pause, step, replay, a track with one segment per
                                 step (coloured by its tone, click to jump), speed
      caption and log            the current step's text, and every step so far
-     scoreboard                 a run marks its cell once it has been watched to the end
+     scoreboard                 js/sim-scoreboard.js: a run marks its cell once watched
+                                to the end; clicking a cell plays that matchup
      reduced motion, cleanup    jumps to the end; stops the frame loop and observer
 
    A scenario supplies the model and the drawing:
@@ -33,6 +34,7 @@
 import { el } from './dom.js';
 import { t, tx } from './i18n.js';
 import { svg } from './icons.js';
+import { scoreboard } from './sim-scoreboard.js';
 import { canvas, css, onResize, reducedMotion } from './sim-kit.js';
 
 export const SPEEDS = { slow: 0.5, normal: 1, fast: 2 };
@@ -70,7 +72,7 @@ export function player(root, { revealed, state }, cfg) {
   const chart = canvas(height);
   const caption = el('p', { class: 'sim-event', 'aria-live': 'polite' });
   const log = el('ol', { class: 'sim-story' });
-  const board = el('div', { class: 'sim-board' });
+  const board = el('div');
   const deck = el('div', { class: 'deck' });
   const track = el('div', { class: 'track' });
   const counter = el('span', { class: 'counter' });
@@ -221,22 +223,29 @@ export function player(root, { revealed, state }, cfg) {
     }, label)),
   ]);
 
-  function paintBoard() {
-    board.textContent = '';
-    const rows = setups.filter(x => revealed || open.includes(x.value));
-    board.append(
-      el('p', { class: 'sim-lbl' }, t('Scoreboard: fills in as you watch each run')),
-      el('table', {}, [
-        el('thead', {}, el('tr', {}, [el('th', {}, ''), ...situations.map(x => el('th', {}, x.label))])),
-        el('tbody', {}, rows.map(r => el('tr', { class: r.value === s.setup ? 'on' : '' }, [
-          el('th', {}, r.label),
-          ...situations.map(x => {
-            const seen = s.played[`${r.value}:${x.value}`], ok = seen && survives(r.value, x.value);
-            return el('td', { class: !seen ? 'unseen' : ok ? 'ok' : 'bad' }, !seen ? '·' : ok ? '✓' : '✗');
-          }),
-        ]))),
-      ]),
-    );
+  const isOpen = v => revealed || open.includes(v);
+  function paintBoard(fresh) {
+    board.replaceChildren(scoreboard({
+      situations, setups, played: s.played, survives, fresh,
+      current: { setup: s.setup, situation: s.situation },
+      isOpen,
+      // Mark every open matchup as watched without playing each one.
+      onFillAll: () => {
+        const added = new Set();
+        for (const r of setups) if (isOpen(r.value))
+          for (const x of situations) {
+            const key = `${r.value}:${x.value}`;
+            if (!s.played[key]) { s.played[key] = true; added.add(key); }
+          }
+        paintDeck();
+        paintBoard(reduce ? undefined : added);
+      },
+      onPick: (setup, situation) => {
+        s.setup = setup; s.situation = situation;
+        paintDeck(); paintBoard(); play();
+        chart.el.scrollIntoView?.({ behavior: reduce ? 'auto' : 'smooth', block: 'center' });
+      },
+    }));
   }
 
   root.append(
