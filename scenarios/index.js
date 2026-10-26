@@ -9,4 +9,5 @@ export default [
   'event-ordering',
   'caching-strategies',
   'distributed-transactions',
+  'webhook-retries',
 ];
