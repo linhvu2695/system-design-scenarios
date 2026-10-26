@@ -16,6 +16,9 @@ const load = id => {
   return cache.get(id);
 };
 const num = id => String(IDS.indexOf(id) + 1).padStart(2, '0');
+// One scenario failing to load (a typo, a stale cached module) leaves out that one only.
+const loadAll = async () => (await Promise.allSettled(IDS.map(load)))
+  .flatMap((r, i) => r.status === 'fulfilled' ? [r.value] : (console.error(IDS[i], r.reason), []));
 
 /* A scenario's category, as a colored label. The color comes from css/style.css
    (.cat-<id>), so it lives with the rest of the palette. */
@@ -57,12 +60,18 @@ async function render() {
   const main = $('#main');
   const m = location.hash.match(/^#\/s\/([\w-]+)$/);
   const c = location.hash.match(/^#\/c\/([\w-]+)$/);
-  const view = m && IDS.includes(m[1]) ? scenarioView(m[1]) : listView(c && category(c[1]) ? c[1] : null);
+  const filter = c && category(c[1]) ? c[1] : null;
+  const all = await loadAll();
+  const view = m && IDS.includes(m[1]) ? scenarioView(m[1]) : listView(all, filter);
   const result = await view.catch(err => {
     console.error(err);
     return { node: el('p', { class: 'muted' }, String(err.message || err)) };
   });
   if (mine !== renderId) { result.cleanup?.(); return; }   // a newer navigation won
+  const side = $('#side');
+  side.textContent = '';
+  // On a scenario page, highlight the scenario's own category.
+  side.append(sidebar(all, m ? all.find(s => s.id === m[1])?.category ?? null : filter));
   main.textContent = '';
   main.append(result.node);
   result.mounted?.();
@@ -70,30 +79,38 @@ async function render() {
   shell();
 }
 
+/* ---------------- sidebar ----------------
+   Every category with how many scenarios it has; it is also the list's filter.
+   A category with none yet stays visible, dimmed and not a link. */
+function sidebar(all, active) {
+  const count = id => all.filter(s => s.category === id).length;
+  const item = (id, label, n) => {
+    const on = active === id;
+    return el('li', {}, el(n || !id ? 'a' : 'span', {
+      class: ['topic-link', id ? `cat-${id}` : '', on ? 'on' : '', n ? '' : 'empty'].join(' ').trim(),
+      href: n || !id ? (id ? `#/c/${id}` : '#/') : null,
+      'aria-current': on ? 'true' : null,
+    }, [id ? el('i') : '', el('span', { class: 'label' }, label), el('span', { class: 'n' }, String(n))]));
+  };
+  return el('nav', { 'aria-label': t('Categories') }, [
+    el('h4', {}, t('Categories')),
+    el('ul', { class: 'topics' }, [
+      item(null, t('All'), all.length),
+      ...CATEGORIES.map(cat => item(cat.id, tx(cat.label), count(cat.id))),
+    ]),
+  ]);
+}
+
 /* ---------------- list ---------------- */
-async function listView(filter) {
-  // One scenario failing to load (a typo, a stale cached module) hides that card only.
-  const all = (await Promise.allSettled(IDS.map(load)))
-    .flatMap((r, i) => r.status === 'fulfilled' ? [r.value] : (console.error(IDS[i], r.reason), []));
+async function listView(all, filter) {
   const node = el('div', { class: 'list' }, [el('p', { class: 'lede' }, t('Each scenario is a situation from a real system with four possible calls. Play with the simulation, make your call, then see why each option holds up or falls apart.'))]);
   if (!all.length) { node.append(el('p', { class: 'muted' }, t('No scenarios yet. Run make new ID=<name> to add one.'))); return { node }; }
 
-  // Filter by category: only categories that have scenarios, each with its count.
-  const count = id => all.filter(s => s.category === id).length;
-  const chip = (id, label, n) => el('a', {
-    class: ['chip', id ? `cat-${id}` : '', filter === id ? 'on' : ''].join(' ').trim(),
-    href: id ? `#/c/${id}` : '#/', 'aria-current': filter === id ? 'true' : null,
-  }, [id ? el('i') : '', label, el('span', { class: 'n' }, String(n))]);
-  node.append(el('nav', { class: 'filters', 'aria-label': t('Categories') }, [
-    chip(null, t('All'), all.length),
-    ...CATEGORIES.filter(cat => count(cat.id)).map(cat => chip(cat.id, tx(cat.label), count(cat.id))),
-  ]));
-
+  // The category filter is the sidebar; the card shows its category as a color only.
   const grid = el('div', { class: 'grid' });
   for (const s of all.filter(s => !filter || s.category === filter)) {
     const p = progress.get(s.id);
     const [cls, label] = !p ? ['new', t('New')] : p.correct ? ['ok', t('Solved')] : ['bad', t('Missed')];
-    // The card shows its category as a color only; the filter chips above are the legend.
     const cat = tx(category(s.category)?.label);
     grid.append(el('a', { class: `card cat-${s.category}`, href: `#/s/${s.id}`, title: cat }, [
       el('div', { class: 'card-top' }, [

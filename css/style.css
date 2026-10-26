@@ -50,7 +50,23 @@ header{position:sticky;top:0;z-index:20;display:flex;align-items:flex-end;justif
   box-shadow:0 0 0 1px rgba(255,255,255,.12)}
 .lang button.on svg,.lang button:hover svg{opacity:1;filter:none}
 
-main{flex:1;width:100%;max-width:880px;margin:0 auto;padding:28px 30px 40px}
+/* Sidebar of categories on the left; the content takes the rest of the width. */
+.layout{flex:1;display:grid;grid-template-columns:250px minmax(0,1fr);width:100%}
+.side{min-width:0;border-right:1px solid var(--line);padding:28px 16px 40px 24px}
+.side nav{position:sticky;top:100px}
+.side h4{font:600 11px var(--mono);letter-spacing:.2em;text-transform:uppercase;color:var(--muted);margin:0 0 10px 10px}
+.topics{list-style:none;margin:0;padding:0;display:grid;gap:2px}
+.topic-link{display:flex;align-items:center;gap:9px;padding:7px 10px;border-radius:9px;font:500 14px var(--body);
+  color:var(--muted);text-decoration:none;border:1px solid transparent;transition:.16s}
+.topic-link i{flex:none;width:8px;height:8px;border-radius:50%;background:var(--cat)}
+.topic-link .label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.topic-link .n{font:500 12px var(--mono);color:var(--faint)}
+a.topic-link:hover{color:var(--text);background:var(--surface)}
+.topic-link.on{color:var(--text);border-color:color-mix(in srgb,var(--cat,var(--blue)) 45%,transparent);
+  background:color-mix(in srgb,var(--cat,var(--blue)) 12%,var(--surface))}
+.topic-link.on .n{color:var(--text)}
+.topic-link.empty{opacity:.45}
+main{min-width:0;padding:28px 30px 40px}
 footer{border-top:1px solid var(--line);padding:16px 30px;color:var(--muted);font-size:12.5px;text-align:center}
 footer p{margin:0;max-width:880px;margin-inline:auto}
 .noscript{padding:30px}
@@ -86,13 +102,6 @@ footer p{margin:0;max-width:880px;margin-inline:auto}
   text-transform:uppercase;text-decoration:none;color:var(--cat);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .cat::before{content:"";flex:none;width:7px;height:7px;border-radius:50%;background:var(--cat)}
 a.cat:hover{text-decoration:underline;text-underline-offset:3px}
-.filters{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 18px}
-.chip{display:inline-flex;align-items:center;gap:7px;font:500 13px var(--body);color:var(--muted);text-decoration:none;
-  background:var(--surface);border:1px solid var(--line);border-radius:99px;padding:5px 12px;transition:.16s}
-.chip i{width:8px;height:8px;border-radius:50%;background:var(--cat)}
-.chip .n{font:500 11px var(--mono);color:var(--faint)}
-.chip:hover{color:var(--text);border-color:var(--faint)}
-.chip.on{color:var(--text);border-color:var(--cat,var(--blue));background:color-mix(in srgb,var(--cat,var(--blue)) 12%,var(--surface))}
 .card h3{font:700 18px/1.3 var(--display);margin:6px 0 0;letter-spacing:-.01em}
 
 /* ---- scenario ---- */
@@ -175,6 +184,14 @@ input[type=range]{accent-color:var(--blue);width:180px;max-width:100%}
   .brand .eyebrow{display:none}
   .brand h1{font-size:20px}
   #score{display:none}
+  /* The sidebar becomes a row of chips above the content. */
+  .layout{grid-template-columns:minmax(0,1fr)}
+  .side{border-right:0;border-bottom:1px solid var(--line);padding:12px 16px}
+  .side nav{position:static}
+  .side h4{display:none}
+  .topics{display:flex;gap:6px;overflow-x:auto;padding-bottom:2px}
+  .topic-link{white-space:nowrap;font-size:13px;padding:5px 11px;border-radius:99px;border-color:var(--line);background:var(--surface)}
+  .topic-link.empty{display:none}
   main{padding:20px 16px 32px}
   footer{padding:14px 16px}
   .scenario h2{font-size:25px}
