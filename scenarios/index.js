@@ -12,4 +12,5 @@ export default [
   'webhook-retries',
   'partial-indexes',
   'connection-pooling',
+  'deploy-strategies',
 ];
