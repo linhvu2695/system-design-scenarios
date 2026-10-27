@@ -13,4 +13,5 @@ export default [
   'partial-indexes',
   'connection-pooling',
   'deploy-strategies',
+  'bloom-filter',
 ];
