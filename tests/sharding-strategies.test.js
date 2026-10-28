@@ -1,13 +1,37 @@
-/* The simulation's model is the scenario's argument, so it is pinned here: sharding on
-   the order id scatters every merchant (and a range puts every new order on one shard);
-   consistent hashing keeps merchants whole and moves little, but cannot keep EU data in
-   the EU or give the largest merchant its own server; only the directory does all of it. */
+/* The simulation's model is the scenario's argument, so it is pinned here as a
+   scoreboard and by the placements behind it: sharding on the order id scatters every
+   merchant (and a range puts every new order on one shard); consistent hashing keeps
+   merchants whole and moves little, but cannot keep EU data in the EU or give the
+   largest merchant its own server; only the directory does all of it. */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { merchants, orders, place, analyze, moved, ranges, directory, hash, START, MAX_SHARDS } from '../scenarios/sharding-strategies/sim.js';
+import { merchants, orders, place, analyze, moved, ranges, directory, hash, run as play, survives, SETUPS, SITUATIONS, GROW_OK, START, MAX_SHARDS } from '../scenarios/sharding-strategies/sim.js';
 
 const ms = merchants(), ords = orders(ms), n = START.length;
 const run = (strategy, k = n) => analyze(place(strategy, ms, ords, k), ms, ords, k);
+
+const EXPECTED = {
+  //           dashboard writes grow  rules
+  range: [false, false, true, false],
+  hash: [false, true, false, false],
+  consistent: [true, true, true, false],
+  directory: [true, true, true, true],
+};
+
+for (const setup of SETUPS)
+  test(`scoreboard: ${setup}`, () => {
+    assert.deepEqual(SITUATIONS.map(x => survives(setup, x)), EXPECTED[setup]);
+  });
+
+test('a dashboard query asks every shard when sharding on the order id, one shard otherwise', () => {
+  for (const setup of SETUPS)
+    for (const q of play(setup, 'dashboard').queries)
+      assert.equal(q.shards.length, setup === 'range' || setup === 'hash' ? n : 1, `${setup}, merchant ${q.id}`);
+});
+
+test('adding a shard moves too many orders only with hash mod N', () => {
+  for (const setup of SETUPS) assert.equal(play(setup, 'grow').movedShare > GROW_OK, setup === 'hash', setup);
+});
 
 test('range on order id puts every new order on one shard', () => {
   assert.equal(run('range').hottest, 1);
@@ -70,4 +94,14 @@ test('data is deterministic and the hash is stable', () => {
   assert.deepEqual(orders(ms), orders(ms));
   assert.equal(hash('merchant-1'), hash('merchant-1'));
   assert.notEqual(hash('merchant-1'), hash('merchant-2'));
+});
+
+test('every captioned step has both languages and the steps cover the run', () => {
+  for (const setup of SETUPS)
+    for (const x of SITUATIONS) {
+      const r = play(setup, x);
+      assert.equal(r.steps[0].t0, 0);
+      assert.equal(r.steps.at(-1).t1, r.end);
+      for (const s of r.steps) assert.ok(s.say.en && s.say.vi && s.t1 >= s.t0, `${setup}/${x}`);
+    }
 });
