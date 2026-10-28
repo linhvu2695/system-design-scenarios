@@ -64,8 +64,8 @@ Ràng buộc:
     {
       id: 'A',
       text: {
-        en: 'Cache each agent and each ticket\'s tag list in Redis, so the per-ticket lookups hit memory instead of the database.',
-        vi: 'Cache từng agent và danh sách tag của từng ticket trong Redis, để các lần tra cứu theo ticket đọc từ bộ nhớ thay vì database.',
+        en: 'Cache each agent and each ticket\'s tag list in Redis for 5 minutes, so the per-ticket lookups hit memory instead of the database.',
+        vi: 'Cache từng agent và danh sách tag của từng ticket trong Redis trong 5 phút, để các lần tra cứu theo ticket đọc từ bộ nhớ thay vì database.',
       },
       why: {
         en: 'The page still makes 200 lookups, one network round trip each. They now go to Redis instead of Postgres, so the time per lookup drops but the count does not. Tags change many times a minute, so the cached tag lists need invalidating on every change, or agents see stale tags. A tag rename has to clear millions of entries. And it adds infrastructure, which the constraints rule out. Caching is for expensive queries. These queries are cheap. There are just too many of them.',
