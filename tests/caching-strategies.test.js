@@ -1,92 +1,82 @@
-/* The simulation's model is the scenario's argument, so it is pinned here: only
-   write-behind takes the per-view writes off Postgres; cache-aside deletes the key on
-   every view so reads keep missing; read-through serves stale counts until its TTL;
-   write-behind is the only one that can lose views when Redis dies. */
+/* The simulation's model is the scenario's argument, so it is pinned here as a
+   scoreboard: every strategy copes with a normal day and a Redis restart, and only
+   write-behind survives breaking news, because it is the only one that stops writing
+   Postgres once per view. Its price, views lost when Redis dies, stays within the
+   few seconds the scenario allows. */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { system, atScale, STRATEGIES, START, TTL, PROD } from '../scenarios/caching-strategies/sim.js';
+import { run, survives, viewsAt, SETUPS, SITUATIONS, T, PEAK, NORMAL, WRITE_BUDGET, TIMEOUT_MS, FLUSH, TTL, CRASH_AT, LOSS_OK } from '../scenarios/caching-strategies/sim.js';
 
-/* 100 views, reading the count after every 10. */
-function run(strategy) {
-  const sys = system(strategy);
-  let t = 0;
-  for (let i = 0; i < 10; i++) {
-    for (let k = 0; k < 10; k++) sys.view((t += 0.01));
-    sys.read((t += 0.01));
-  }
-  return sys;
-}
+const EXPECTED = {
+  //             normal news  crash
+  today: [true, false, true],
+  aside: [true, false, true],
+  through: [true, false, true],
+  readthrough: [true, false, true],
+  behind: [true, true, true],
+};
 
-test('every strategy except write-behind writes Postgres once per view', () => {
-  for (const st of ['today', 'aside', 'through', 'readthrough']) assert.equal(run(st).state.writes, 100, st);
+for (const setup of SETUPS)
+  test(`scoreboard: ${setup}`, () => {
+    assert.deepEqual(SITUATIONS.map(x => survives(setup, x)), EXPECTED[setup]);
+  });
+
+test('breaking news peaks at the scenario’s 150,000 views a second', () => {
+  assert.equal(viewsAt('news', T), PEAK);
+  assert.equal(viewsAt('normal', T), NORMAL);
 });
 
-test('write-behind writes Postgres once per flush, with every pending view', () => {
-  const sys = run('behind');
-  assert.equal(sys.state.writes, 0);
-  assert.equal(sys.state.db, START);
-  assert.equal(sys.state.pending, 100);
-  sys.flush();
-  assert.equal(sys.state.writes, 1);
-  assert.equal(sys.state.db, START + 100);
-  assert.equal(sys.state.pending, 0);
-  assert.deepEqual(sys.flush(), [], 'nothing to flush, no write');
-});
-
-test('cache-aside deletes the key on every view, so a read after a view always misses', () => {
-  const sys = run('aside');
-  assert.equal(sys.state.hits, 0);
-  assert.equal(sys.state.misses, 10);
-  assert.equal(sys.state.reads, 10);
-});
-
-test('write-through and write-behind keep the cache fresh: readers see the true count', () => {
-  for (const st of ['through', 'behind']) {
-    const sys = run(st);
-    assert.equal(sys.state.seen, sys.state.truth, st);
-    assert.equal(sys.state.hits, 10, st);
-    assert.equal(sys.state.reads, 0, st);
+test('every strategy but write-behind writes Postgres once per view', () => {
+  for (const setup of ['today', 'aside', 'through', 'readthrough']) {
+    const r = run(setup, 'news');
+    assert.ok(r.samples.every(s => s.writes === s.v), setup);
+    assert.ok(r.maxPage >= TIMEOUT_MS, `${setup}: pages should time out`);
   }
 });
 
-test('read-through serves the old count until the TTL, then reloads', () => {
-  const sys = system('readthrough');
-  sys.view(0.1);
-  sys.read(0.2);
-  assert.equal(sys.state.seen, START, 'stale within the TTL');
-  sys.read(TTL + 0.1);
-  assert.equal(sys.state.seen, START + 1, 'reloaded after the TTL');
-  assert.equal(sys.state.reads, 1);
+test('write-behind writes once per article per flush, within the budget, and pages never wait', () => {
+  const r = run('behind', 'news');
+  assert.ok(r.maxWrites <= WRITE_BUDGET, `got ${r.maxWrites}`);
+  assert.ok(r.flushes.every(f => f.t % FLUSH === 0));
+  assert.ok(r.samples.every(s => s.queue === 0 && s.pageMs < 5));
 });
 
-test('crashing Redis loses pending views only with write-behind', () => {
-  for (const st of STRATEGIES) {
-    const sys = system(st);
-    for (let i = 0; i < 7; i++) sys.view(i * 0.1);
-    sys.crash(1);
-    assert.equal(sys.state.lost, st === 'behind' ? 7 : 0, st);
-    sys.read(1.1);
-    if (st !== 'behind') assert.equal(sys.state.seen, START + 7, `${st}: Postgres had every view`);
+test('write-behind loses no view on the way: Postgres plus pending is the true count', () => {
+  for (const x of ['normal', 'news']) {
+    const last = run('behind', x).samples.at(-1);
+    assert.ok(Math.abs(last.db + last.pending - last.truth) < 1, x);
   }
 });
 
-test('every hop carries a caption in both languages and a state snapshot', () => {
-  for (const st of STRATEGIES) {
-    const sys = system(st);
-    for (const hop of [...sys.view(0), ...sys.read(0.1), ...sys.crash(0.2), ...sys.read(0.3)]) {
-      assert.ok(hop.say.en && hop.say.vi, `${st}: ${hop.label}`);
-      assert.ok(hop.state && typeof hop.state.db === 'number', `${st}: ${hop.label}`);
+test('cache-aside deletes the key on every view, so every read goes to Postgres too', () => {
+  const r = run('aside', 'news');
+  assert.ok(r.samples.every(s => s.dels === s.v && s.reads === s.v));
+});
+
+test('read-through reloads every TTL, so the page trails by up to the TTL', () => {
+  const r = run('readthrough', 'normal');
+  assert.deepEqual(r.loads.map(l => l.t), [TTL, 2 * TTL, 3 * TTL]);
+  assert.ok(r.maxTrail > TTL - 1 && r.maxTrail <= TTL + 0.01, `got ${r.maxTrail}`);
+  assert.ok(run('behind', 'normal').maxTrail < 0.01, 'write-behind reads include pending views');
+});
+
+test('a Redis restart loses views only with write-behind, at most one flush interval', () => {
+  for (const setup of SETUPS) {
+    const r = run(setup, 'crash');
+    if (setup === 'behind') {
+      assert.ok(r.lost > 0);
+      assert.ok(r.lostSec <= LOSS_OK);
+      assert.ok(Math.abs(r.lostSec - (CRASH_AT % FLUSH)) < 0.2);
+    } else assert.equal(r.lost, 0, setup);
+  }
+});
+
+test('every captioned step has both languages and the steps cover the run', () => {
+  for (const setup of SETUPS)
+    for (const x of SITUATIONS) {
+      const r = run(setup, x);
+      assert.equal(r.steps[0].t0, 0);
+      assert.equal(r.steps.at(-1).t1, T);
+      for (const s of r.steps) assert.ok(s.say.en && s.say.vi && s.t1 >= s.t0, `${setup}/${x}`);
     }
-  }
-});
-
-test('at the scenario’s scale only write-behind brings Postgres writes to a few hundred a second', () => {
-  for (const st of STRATEGIES) {
-    const w = atScale(st).dbWrites;
-    if (st === 'behind') assert.ok(w <= 300, `${st}: ${w}`);
-    else assert.equal(w, 150000, st);
-  }
-  assert.equal(atScale('behind').viewWaitsOnDb, false);
-  assert.equal(atScale('behind').lostUpTo, PROD.flush, 'matches the scenario: every 5 seconds');
-  assert.equal(atScale('readthrough').staleUpTo, PROD.ttl, 'matches option D: kept for 10 seconds');
 });
