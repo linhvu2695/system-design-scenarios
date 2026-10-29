@@ -14,4 +14,5 @@ export default [
   'connection-pooling',
   'deploy-strategies',
   'bloom-filter',
+  'dead-letter-queues',
 ];
