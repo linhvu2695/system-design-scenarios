@@ -4,7 +4,7 @@
    and every new algorithm still holds a script to 40 + 30 a minute. */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { decide, limiter, traffic, BURST, RATE, SPAN, WINDOW } from '../scenarios/rate-limit-algorithms/sim.js';
+import { decide, limiter, traffic, run as play, survives, BURST, RATE, SPAN, WINDOW, SETUPS, SITUATIONS, TIMEOUT, FEW } from '../scenarios/rate-limit-algorithms/sim.js';
 
 const app = traffic('app');
 const run = algo => decide(algo, app);
@@ -88,4 +88,42 @@ test('views: token refill, leaky queue, log ageing, counter estimate, fixed rese
   fixed.offer(5);
   assert.equal(fixed.view(30).count, 1);
   assert.equal(fixed.view(61).count, 0);
+});
+
+/* The scoreboard: one situation per constraint, and only the token bucket meets all four. */
+const EXPECTED = {
+  fixed: [true, false, false, true],
+  log: [true, true, false, false],
+  counter: [true, true, false, true],
+  leaky: [true, false, false, false],
+  token: [true, true, true, true],
+};
+
+test('scoreboard: steady, sync, editing, script', () => {
+  assert.deepEqual(SITUATIONS, ['steady', 'sync', 'editing', 'script']);
+  for (const setup of SETUPS)
+    assert.deepEqual(SITUATIONS.map(x => survives(setup, x)), EXPECTED[setup], setup);
+});
+
+test('runs fail for the reason the scenario gives', () => {
+  assert.equal(play('fixed', 'sync').rejected, BURST - 30);
+  assert.ok(play('leaky', 'sync').slow > 0 && play('leaky', 'sync').rejected === 0);
+  for (const algo of ['log', 'counter']) assert.ok(play(algo, 'editing').rejected > 10, algo);
+  assert.ok(play('log', 'script').most > FEW, 'the log keeps a timestamp per request');
+  assert.ok(play('leaky', 'script').maxWait > TIMEOUT, 'the leaky bucket holds requests open');
+  const script = play('token', 'script');
+  assert.ok(script.served <= script.cap + 1 && script.most <= FEW);
+});
+
+test('steps run forward in time and every step has both languages', () => {
+  for (const setup of SETUPS) for (const x of SITUATIONS) {
+    const { steps, end, summary } = play(setup, x);
+    let t = -Infinity;
+    for (const st of steps) {
+      assert.ok(st.t0 >= t && st.t1 >= st.t0 && st.t1 <= end + 1e-9, `${setup}/${x}`);
+      assert.ok(st.say.en && st.say.vi && st.dur > 0);
+      t = st.t0;
+    }
+    assert.ok(summary.en && summary.vi);
+  }
 });
