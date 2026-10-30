@@ -16,4 +16,5 @@ export default [
   'bloom-filter',
   'cache-stampede',
   'dead-letter-queues',
+  'circuit-breaker',
 ];
