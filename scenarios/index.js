@@ -17,4 +17,5 @@ export default [
   'cache-stampede',
   'dead-letter-queues',
   'circuit-breaker',
+  'feed-fanout',
 ];
