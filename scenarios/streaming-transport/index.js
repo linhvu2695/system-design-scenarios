@@ -2,7 +2,7 @@ import * as simulation from './sim.js';
 
 export default {
   category: 'networking',
-  topic: { en: 'Streaming transports: WebSockets, SSE, long polling, gRPC', vi: 'Giao thức streaming: WebSockets, SSE, long polling, gRPC' },
+  topic: { en: 'Streaming transports', vi: 'Giao thức streaming' },
   title: {
     en: 'Streaming an AI answer to a phone on a train',
     vi: 'Stream câu trả lời AI tới chiếc điện thoại trên tàu',

@@ -2,7 +2,7 @@ import * as simulation from './sim.js';
 
 export default {
   category: 'scalability',
-  topic: { en: 'Feed fanout: push, pull and hybrid', vi: 'Fanout feed: push, pull và hybrid' },
+  topic: { en: 'Feed fanout', vi: 'Fanout feed' },
   title: {
     en: 'One post, 1.5 million feeds',
     vi: 'Một bài đăng, 1,5 triệu feed',
