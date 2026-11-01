@@ -19,4 +19,5 @@ export default [
   'circuit-breaker',
   'feed-fanout',
   'streaming-transport',
+  'keyset-pagination',
 ];
