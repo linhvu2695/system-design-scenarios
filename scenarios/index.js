@@ -18,4 +18,5 @@ export default [
   'dead-letter-queues',
   'circuit-breaker',
   'feed-fanout',
+  'streaming-transport',
 ];
